@@ -1,20 +1,57 @@
 # Continuous R&D Knowledge Engine
 
-An incremental, evidence-gated knowledge system for transcript-driven R&D work.
+> A living AI wiki that turns multi-expert transcripts (TCM, real estate, stock trading) into
+> **evidence-gated canonical knowledge** — preserving provenance, dissent, and resolution history
+> instead of flattening disagreement into one anonymous answer.
 
-The intention is to build a living AI wiki. You drop in transcripts and notes from TCM, real estate,
-and stock trading; the system turns them into refined canonical knowledge; the AI then uses that
-knowledge as working experience when it helps with later R&D tasks. The goal is not to flatten
-disagreement into a single anonymous answer. The goal is to preserve provenance, dissent, evidence
-chains, and prior resolution history so the agent gets better at asking the right questions over time.
+Drop in transcripts and notes; the engine extracts claims, flags missing data early, detects
+conflicts, and only promotes knowledge to canonical once it clears a per-domain evidence gate. An
+agent can then use that knowledge as working experience for later R&D tasks.
 
-## Intention
+## Highlights
 
-The chat history established four product goals:
+- **Evidence, not truth** — every claim carries provenance and epistemic status; nothing is canonical without evidence.
+- **Gaps before conflicts** — missing data is flagged for clarification before conflict checks run.
+- **Consensus with preserved dissent** — never forces a single winner where the domain doesn't support one.
+- **Graph-first on Neo4j 5** — one engine for the property graph *and* native vector search; no split-brain, no runtime fallbacks.
+- **Bounded vs unbounded discipline** — deterministic work stays in code; only genuinely semantic work goes to the LLM.
+- **User is a source, not an oracle** — user input enters as `Unverified` and must earn confirmation.
+
+## Contents
+
+- [Quick Start](#quick-start)
+- [Status: implemented vs planned](#current-implementation-vs-planned)
+- [Usage scenarios](wiki/Usage-Scenarios.md)
+- [Wiki](#wiki) — full architecture, data model, pipeline, and setup docs
+- Deep design: [Architecture](wiki/Architecture.md) · [Data Model](wiki/Data-Model.md) · [Pipeline](wiki/Pipeline.md) · [Domain Policies](wiki/Domain-Policies.md)
+
+## Quick Start
+
+```powershell
+# From the repo root
+python -m pytest                     # unit tests, no external services needed
+
+# Optional: stand up the graph engine, then run the gated integration tests.
+# Docker needs hardware virtualization; if blocked, use Neo4j Community Server
+# (no Docker) — see wiki/Setup-Neo4j.md (Option A).
+docker compose up -d
+$env:KE_NEO4J_URI = "bolt://localhost:7687"
+$env:KE_NEO4J_USER = "neo4j"
+$env:KE_NEO4J_PASSWORD = "knowledge-engine"
+$env:KE_NEO4J_DATABASE = "neo4j"
+python -m pytest tests/test_graph_neo4j.py
+
+python server.py                     # MCP server
+```
+
+Copy `.env.example` to `.env` and fill in the Neo4j, embedding, and LLM settings. Required backends
+must be configured — the engine does not run in a degraded mode.
+
+## Product goals
 
 - Treat every transcript as evidence, not truth.
 - Detect missing data early so the user can clarify on the spot.
-- Resolve conflicts collaboratively with the user, then store the decision as reusable memory.
+- Resolve conflicts collaboratively, then store the decision as reusable memory.
 - Let future transcripts reuse that memory so the agent already knows what went wrong before.
 
 ## What We Locked In
@@ -275,30 +312,6 @@ It also exposes a `knowledge://state` resource with a JSON snapshot of the curre
 - `.vscode/mcp.json` - VS Code MCP wiring
 - `pyproject.toml` - Python packaging and test config
 
-## Quick Start
-
-```powershell
-cd "c:\Users\r.a.ling\OneDrive - Avanade\Documents\work\Native AI\knowledge_engine"
-
-# Unit tests (no external services needed)
-python -m pytest
-
-# Stand up the graph engine, then run the gated integration tests.
-# Docker requires hardware virtualization; if that is blocked, use the
-# Neo4j Community Server (no Docker) — see wiki/Setup-Neo4j.md (Option A).
-docker compose up -d
-$env:KE_NEO4J_URI = "bolt://localhost:7687"
-$env:KE_NEO4J_USER = "neo4j"
-$env:KE_NEO4J_PASSWORD = "knowledge-engine"
-$env:KE_NEO4J_DATABASE = "neo4j"
-python -m pytest tests/test_graph_neo4j.py
-
-# MCP server
-python server.py
-```
-
-Copy `.env.example` to `.env` and fill in the Neo4j, embedding, and LLM settings. Required backends must be configured — the engine does not run in a degraded mode.
-
 ## Beta Test Plan
 
 The beta suite should exercise the full workflow:
@@ -338,3 +351,7 @@ Full documentation lives in [`wiki/`](wiki/) and mirrors the GitHub project wiki
 - Unknown is a valid permanent state.
 - The design is graph-first on Neo4j 5, with vectors as a core capability and no runtime fallbacks.
 - This repository is meant to become the AI's working memory for later R&D tasks.
+
+## Author
+
+Maintained by **ronnyckling** ([ronnyckling@gmail.com](mailto:ronnyckling@gmail.com)).
