@@ -1,0 +1,9 @@
+{
+  "servers": {
+    "knowledge-engine": {
+      "type": "stdio",
+      "command": "python",
+      "args": ["server.py"]
+    }
+  }
+}
