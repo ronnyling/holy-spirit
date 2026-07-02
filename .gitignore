@@ -1,0 +1,32 @@
+# --- Secrets (NEVER commit) ---------------------------------------------------
+.env
+.env.*
+!.env.example
+
+# --- Python -------------------------------------------------------------------
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+build/
+dist/
+.venv/
+venv/
+env/
+
+# --- Test / tooling caches ----------------------------------------------------
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# --- Local runtime data (harboured transcripts, generated docs) ---------------
+data/transcripts/
+data/documents/
+data/manifest.json
+data/uat_state.json
+
+# --- Editor / OS --------------------------------------------------------------
+.DS_Store
+Thumbs.db

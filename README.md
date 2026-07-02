@@ -41,11 +41,36 @@ $env:KE_NEO4J_PASSWORD = "knowledge-engine"
 $env:KE_NEO4J_DATABASE = "neo4j"
 python -m pytest tests/test_graph_neo4j.py
 
-python server.py                     # MCP server
+python server.py                     # MCP server (for VS Code Copilot)
 ```
 
 Copy `.env.example` to `.env` and fill in the Neo4j, embedding, and LLM settings. Required backends
 must be configured — the engine does not run in a degraded mode.
+
+### Try it now (CLI / UAT)
+
+The fastest way to use the system end-to-end today is the CLI. It runs the full
+ingest pipeline on a local file-backed store and lets you query without
+embeddings. Full walkthrough: [docs/UAT-Usage-Guide.md](docs/UAT-Usage-Guide.md).
+
+```powershell
+# 1. Put transcripts in a folder (one .txt per transcript; see the guide for
+#    optional .meta.json / .claims.json sidecars).
+# 2. Ingest a file or a whole folder:
+python scripts/ke.py ingest data/uat_transcripts --domain "real estate"
+
+# 3. Ask research questions:
+python scripts/ke.py ask --entity "Cap Rate Rules"
+python scripts/ke.py ask --domain "real estate"
+python scripts/ke.py ask --query "cap rate suburban"     # keyword search
+python scripts/ke.py snapshot
+```
+
+> **Storage status:** the CLI uses the in-memory store persisted to
+> `data/uat_state.json`. The engine's ingest pipeline is not yet wired to Neo4j
+> (the Neo4j store currently implements only the query/vector side). See
+> [Known limitations](docs/UAT-Usage-Guide.md#known-limitations).
+
 
 ## Product goals
 
@@ -277,15 +302,19 @@ but not yet built.
 - Resolution-case creation and reopening from similar prior cases
 - Per-domain evidence gates and evidence scoring
 - Graph schema (`graph/schema.py`): Cypher constraints + native vector index DDL + cycle-probe query (unit-tested)
-- `graph/neo4j_store.py`: real Neo4j-driver store — node/edge upserts, native vector search (eventually-consistent, with `await_indexes`), and Cypher-native cycle detection. **Verified against Neo4j Community 2026.05.0** — full suite `python -m pytest -q` reports **30 passed** (unit tests + 3 skipped Neo4j integration). See [wiki/Setup-Neo4j.md](wiki/Setup-Neo4j.md).
+- `graph/neo4j_store.py`: real Neo4j-driver store — node/edge upserts, native vector search (eventually-consistent, with `await_indexes`), and Cypher-native cycle detection. **Verified against Neo4j Community 2026.05.0** — full suite `python -m pytest -q` reports **43 passed** (unit + extraction + persistence tests; Neo4j integration tests run when a database is reachable, otherwise skipped). See [wiki/Setup-Neo4j.md](wiki/Setup-Neo4j.md).
 - `embeddings.py`: OpenAI-compatible embedding client using async httpx + tenacity retry (exponential backoff on 429/503). Optional at server startup — when embedding env vars are absent, vector search tools return a clear error; all other tools still work.
+- `llm.py` + `extraction.py`: MiMo (OpenAI-compatible) chat client and LLM-backed claim extraction. When a valid `KE_MIMO_API_KEY` is set and a transcript arrives with no hand-authored claims, claims are extracted from the raw text. Extraction is the **unbounded** layer; parsing/validation is deterministic and **never fabricates evidence**, so extracted claims enter as `Unverified`. Optional and non-breaking (unit-tested with a stubbed client).
+- `scripts/ke.py`: command-line interface for ingest + query on the file-backed store — the recommended UAT surface. See [docs/UAT-Usage-Guide.md](docs/UAT-Usage-Guide.md).
+- `store.py` JSON persistence (`save`/`load`) so an ingested corpus survives across CLI runs.
 - Query tools in `engine.py` + `neo4j_store.py`: vector search over claims and entities, get full entity/claim details, search by domain.
 - MCP server with 10 tools (FastMCP, stdio transport) for VS Code Copilot integration.
 
 **Still to build (no fallbacks — these block full production):**
 
+- **Neo4j write-path adapter (top priority).** The engine's ingest pipeline currently targets the in-memory `KnowledgeStore`. The `KnowledgeGraphStore` implements only the query/vector side with a different interface, so the MCP server's *ingestion* tools do not yet persist to Neo4j. The engine needs `KnowledgeGraphStore` to implement the same interface it expects (`upsert_entity(name)→Entity`, `add_claim→Claim`, `observe_slot`, `get_slot`, `confirm_slot`, `list_canonical_claims`, `get_expected_slots`, resolution-case methods, and dict-like accessors).
+- A **valid MiMo API key** — extraction is wired but the current key returns 401; and **an embeddings provider** — the MiMo gateway exposes no `/embeddings` endpoint, so semantic vector search stays off until one is configured.
 - LLM-backed semantic gap detection, claim reconciliation, and conflict interpretation (MiMo 2.5)
-- Switching the engine's default store from the in-process substrate to `KnowledgeGraphStore` (store itself is now verified against Neo4j)
 - Versioned markdown canonical store
 - Cold-start-scale thresholds and drift / alert-fatigue safeguards tuned for real volume
 - HTTP/SSE transport for the MCP server (currently stdio only — works for Copilot, not for autonomous pipeline agents)
@@ -310,14 +339,21 @@ The project exposes an MCP server (FastMCP, stdio transport) with these tools:
 
 It also exposes a `knowledge://state` resource with a JSON snapshot of the current engine state.
 
-**Current limitation:** stdio transport only works when VS Code Copilot is active. Autonomous agent pipelines (e.g., `income_research_os` funnel, `native ai auction investment` scraper) cannot use this yet — they need either direct Python import (`pip install -e ../knowledge_engine`) or HTTP/SSE transport (planned).
+**Current limitations:**
+- **Ingestion tools are not yet wired to Neo4j.** The engine pipeline targets the in-memory store; a `KnowledgeGraphStore` write-adapter is required before `ingest_transcript` (and the other curation tools) persist to Neo4j via the server. For working ingest + query today, use the CLI (`scripts/ke.py`, file-backed store) — see [docs/UAT-Usage-Guide.md](docs/UAT-Usage-Guide.md).
+- stdio transport only works when VS Code Copilot is active. Autonomous agent pipelines (e.g., `income_research_os` funnel, `native ai auction investment` scraper) cannot use this yet — they need either direct Python import (`pip install -e ../knowledge_engine`) or HTTP/SSE transport (planned).
 
 ## Project Layout
 
 - `src/knowledge_engine/` - runtime package (engine, models, chunking, documentation, registry, gaps, conflicts, evidence, resolution, policy, embeddings)
 - `src/knowledge_engine/graph/` - Neo4j graph layer (`schema.py` pure DDL, `neo4j_store.py` driver store with vector search)
 - `src/knowledge_engine/embeddings.py` - OpenAI-compatible embedding client (async httpx + tenacity retry)
-- `tests/` - unit tests, graph schema tests, gated Neo4j integration tests, and beta scenarios
+- `src/knowledge_engine/llm.py` - MiMo (OpenAI-compatible) chat client (async httpx + tenacity retry)
+- `src/knowledge_engine/extraction.py` - LLM-backed claim extraction (unbounded LLM + deterministic parsing)
+- `src/knowledge_engine/bootstrap.py` - shared engine bootstrap + `.env` loader (used by server and CLI)
+- `scripts/ke.py` - command-line interface (ingest + ask) for UAT on the file-backed store
+- `docs/UAT-Usage-Guide.md` - step-by-step guide: setup, transcript folder layout, ingest, query, limitations
+- `tests/` - unit tests, graph schema tests, gated Neo4j integration tests, extraction + persistence tests, and beta scenarios
 - `beta_*.py` - runnable end-to-end persona walkthroughs (XR copilot, autonomous scraping agent)
 - `docker-compose.yml` - Neo4j 5 (graph + native vector index)
 - `.env.example` - required backend configuration (no fallbacks)

@@ -7,6 +7,7 @@ from .conflicts import ConflictDetector, ConflictMatch
 from .contracts import ClaimDraft, ConflictSummary, EvidenceDraft, GapFlag, SlotSuggestion, TranscriptInput, TranscriptOutcome
 from .embeddings import EmbeddingClient
 from .evidence import EvidenceLedger
+from .extraction import ClaimExtractor
 from .gaps import GapDetector
 from .graph.neo4j_store import KnowledgeGraphStore
 from .learning import SlotLearner
@@ -24,9 +25,15 @@ class KnowledgeEngine:
         registry: TranscriptRegistry | None = None,
         store: KnowledgeStore | KnowledgeGraphStore | None = None,
         embedding_client: EmbeddingClient | None = None,
+        extractor: ClaimExtractor | None = None,
     ) -> None:
         self.store = store or KnowledgeStore()
         self.embedding_client = embedding_client
+        # Optional LLM-backed claim extraction. When present and a transcript
+        # arrives with no hand-authored claim_drafts, claims are extracted from
+        # the raw text. Extracted claims carry NO evidence, so they enter as
+        # UNVERIFIED and must earn promotion through the normal evidence gate.
+        self.extractor = extractor
         self.slot_learner = SlotLearner()
         self.gap_detector = GapDetector()
         self.conflict_detector = ConflictDetector()
@@ -49,6 +56,21 @@ class KnowledgeEngine:
             )
 
         entity = self.store.upsert_entity(canonical_name=transcript.entity_name)
+
+        # LLM auto-extraction: only when the caller supplied no claim_drafts and
+        # an extractor is wired. Hand-authored drafts always take precedence.
+        claim_drafts = transcript.claim_drafts
+        extraction_notes: list[str] = []
+        if not claim_drafts and self.extractor is not None:
+            claim_drafts = self.extractor.extract(
+                domain=transcript.domain,
+                entity_name=transcript.entity_name,
+                transcript_text=transcript.transcript_text,
+            )
+            extraction_notes.append(
+                f"LLM extracted {len(claim_drafts)} claim(s) from transcript text (Unverified until evidence)"
+            )
+
         claim_ids: list[str] = []
         new_claims: list[Claim] = []
         confirmed_claim_ids: list[str] = []
@@ -58,10 +80,10 @@ class KnowledgeEngine:
         gap_flags: list[GapFlag] = []
         conflict_summaries: list[ConflictSummary] = []
         open_case_ids: list[str] = []
-        notes: list[str] = []
+        notes: list[str] = list(extraction_notes)
         observed_slot_names: set[str] = set()
 
-        for draft in transcript.claim_drafts:
+        for draft in claim_drafts:
             claim = self._build_claim(transcript, entity.id or "", draft)
             claim = self.store.add_claim(claim)
             claim_ids.append(claim.id or "")
@@ -98,7 +120,7 @@ class KnowledgeEngine:
         )
 
         canonical_claims = self.store.list_canonical_claims(entity.id or "")
-        for claim, draft in zip(new_claims, transcript.claim_drafts):
+        for claim, draft in zip(new_claims, claim_drafts):
             matches = self.conflict_detector.detect(canonical_claims, claim)
             if matches:
                 claim.epistemic_status = EpistemicStatus.DISPUTED

@@ -1,0 +1,26 @@
+[
+  {
+    "statement": "A 6% cap rate suits a stable, well-located suburban asset in a balanced market.",
+    "slot_name": "cap_rate",
+    "observed_slots": ["cap_rate"],
+    "evidence": [
+      {
+        "source_kind": "external_doc",
+        "source_id": "uat-cap-rate-interview",
+        "credibility": 0.9
+      }
+    ]
+  },
+  {
+    "statement": "Financing assumptions must hold for the exit to work over one full cycle.",
+    "slot_name": "exit_assumptions",
+    "observed_slots": ["exit_assumptions"],
+    "evidence": [
+      {
+        "source_kind": "external_doc",
+        "source_id": "uat-cap-rate-interview",
+        "credibility": 0.9
+      }
+    ]
+  }
+]

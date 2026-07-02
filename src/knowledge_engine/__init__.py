@@ -12,8 +12,10 @@ from .contracts import (
 )
 from .engine import KnowledgeEngine
 from .evidence import EvidenceEvaluation, EvidenceLedger
+from .extraction import ClaimExtractor
 from .gaps import GapDetector
 from .learning import SlotLearner, SlotObservation
+from .llm import MiMoClient
 from .models import Claim, Entity, Evidence, EpistemicStatus, Provenance, ResolutionCase, Slot, SlotLifecycle
 from .policy import DomainPolicy, get_domain_policy
 from .registry import HarbourResult, TranscriptRecord, TranscriptRegistry
@@ -22,6 +24,7 @@ from .store import KnowledgeStore
 
 __all__ = [
     "ClaimDraft",
+    "ClaimExtractor",
     "Claim",
     "Chunk",
     "ConflictDetector",
@@ -41,6 +44,7 @@ __all__ = [
     "HarbourResult",
     "KnowledgeEngine",
     "KnowledgeStore",
+    "MiMoClient",
     "ResolutionMemory",
     "Provenance",
     "ResolutionCase",

@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import json
 from datetime import datetime, timezone
+from pathlib import Path
 from uuid import uuid4
 
 from .models import Claim, Entity, Evidence, EpistemicStatus, ResolutionCase, Slot, SlotLifecycle
@@ -162,3 +164,46 @@ class KnowledgeStore:
             "slots": len(self.slots),
             "resolution_cases": len(self.resolution_cases),
         }
+
+    # -- persistence -----------------------------------------------------------
+    # JSON round-trip for the CLI/UAT path so an ingested corpus survives across
+    # separate `ingest` and `ask` invocations. This is local UAT persistence,
+    # NOT the production graph store.
+    def to_dict(self) -> dict:
+        return {
+            "entities": {k: v.model_dump(mode="json") for k, v in self.entities.items()},
+            "claims": {k: v.model_dump(mode="json") for k, v in self.claims.items()},
+            "evidence": {k: v.model_dump(mode="json") for k, v in self.evidence.items()},
+            "slots": {k: v.model_dump(mode="json") for k, v in self.slots.items()},
+            "resolution_cases": {
+                k: v.model_dump(mode="json") for k, v in self.resolution_cases.items()
+            },
+        }
+
+    def save(self, path: str | Path) -> None:
+        target = Path(path)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(json.dumps(self.to_dict(), indent=2), encoding="utf-8")
+
+    @classmethod
+    def load(cls, path: str | Path) -> "KnowledgeStore":
+        store = cls()
+        source = Path(path)
+        if not source.is_file():
+            return store
+        data = json.loads(source.read_text(encoding="utf-8"))
+        store.entities = {k: Entity.model_validate(v) for k, v in data.get("entities", {}).items()}
+        store.claims = {k: Claim.model_validate(v) for k, v in data.get("claims", {}).items()}
+        store.evidence = {k: Evidence.model_validate(v) for k, v in data.get("evidence", {}).items()}
+        store.slots = {k: Slot.model_validate(v) for k, v in data.get("slots", {}).items()}
+        store.resolution_cases = {
+            k: ResolutionCase.model_validate(v)
+            for k, v in data.get("resolution_cases", {}).items()
+        }
+        # Rebuild the (entity_id, slot_name) -> slot_id index from loaded slots.
+        store._slot_index = {
+            (slot.entity_id, slot.name.strip().lower()): slot.id
+            for slot in store.slots.values()
+            if slot.id
+        }
+        return store

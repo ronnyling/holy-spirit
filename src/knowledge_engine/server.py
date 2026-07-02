@@ -25,61 +25,15 @@ Resource:
 from __future__ import annotations
 
 import json
-import os
-import sys
 from typing import Any
 
 from mcp.server.fastmcp import FastMCP
 
+from .bootstrap import build_engine_from_env
 from .contracts import EvidenceDraft, TranscriptInput
-from .embeddings import EmbeddingClient
-from .engine import KnowledgeEngine
 from .models import SlotLifecycle
 
-
-def _create_engine() -> KnowledgeEngine:
-    """Create the knowledge engine with Neo4j graph store (required)."""
-    neo4j_uri = os.environ.get("KE_NEO4J_URI", "")
-    neo4j_user = os.environ.get("KE_NEO4J_USER", "")
-    neo4j_password = os.environ.get("KE_NEO4J_PASSWORD", "")
-    neo4j_database = os.environ.get("KE_NEO4J_DATABASE", "neo4j")
-    embedding_dims = int(os.environ.get("KE_EMBEDDING_DIMENSIONS", "0"))
-
-    if not neo4j_uri:
-        print("FATAL: KE_NEO4J_URI must be set", file=sys.stderr)
-        raise SystemExit(1)
-    if not neo4j_user:
-        print("FATAL: KE_NEO4J_USER must be set", file=sys.stderr)
-        raise SystemExit(1)
-    if not neo4j_password:
-        print("FATAL: KE_NEO4J_PASSWORD must be set", file=sys.stderr)
-        raise SystemExit(1)
-
-    from .graph.neo4j_store import KnowledgeGraphStore
-
-    store = KnowledgeGraphStore(
-        uri=neo4j_uri,
-        user=neo4j_user,
-        password=neo4j_password,
-        database=neo4j_database,
-        embedding_dimensions=embedding_dims,
-    )
-    store.verify()
-    store.apply_schema()
-
-    # Embedding client is optional: vector search tools are unavailable without
-    # it, but ingestion + non-vector query tools still work.
-    embedding_client = EmbeddingClient.from_env()
-    if embedding_client is None:
-        print(
-            "WARNING: KE_EMBEDDING_API_KEY not set — vector search tools disabled.",
-            file=sys.stderr,
-        )
-
-    return KnowledgeEngine(store=store, embedding_client=embedding_client)
-
-
-engine = _create_engine()
+engine = build_engine_from_env()
 
 mcp_server = FastMCP(
     "knowledge-engine",

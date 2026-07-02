@@ -1,0 +1,7 @@
+{
+  "domain": "real estate",
+  "entity_name": "Cap Rate Rules",
+  "source_kind": "external_doc",
+  "source_id": "uat-cap-rate-interview",
+  "source_ref": "data/uat_transcripts/cap_rate.txt"
+}
