@@ -203,7 +203,7 @@ Per-domain evidence bars:
 | Limitation | Impact | To fix |
 |---|---|---|
 | **Neo4j ingest not wired** | The engine's ingest pipeline targets the in-memory store; the Neo4j store implements only the query/vector side with a different interface. The MCP server's *ingestion* tools therefore don't work against Neo4j yet. | Build a `KnowledgeGraphStore` adapter that implements the same interface the engine expects (`upsert_entity(name)→Entity`, `add_claim→Claim`, `observe_slot`, `confirm_slot`, `list_canonical_claims`, `get_expected_slots`, ...). Approved-layer work. |
-| **MiMo key 401** | LLM auto-extraction is wired but rejected by the gateway. | Provide a valid `KE_MIMO_API_KEY`. |
+| **Rate limits** | MiMo gateway has rate limits; rapid repeated requests will hit 429. | Space out ingests or upgrade plan. |
 | **No embeddings endpoint** | Semantic vector search (`search_claims`/`search_entities`) is off. CLI `--query` uses keyword matching instead. | Provide an embeddings provider (`KE_EMBEDDING_*`), then embed claims at ingest. |
 | **CLI curation commands** | Slot/claim/case promotion is via API/MCP, not yet the CLI. | Add `confirm-slot` / `promote-claim` / `resolve-case` subcommands on request. |
 

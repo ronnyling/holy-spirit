@@ -120,7 +120,7 @@ def cmd_ingest(args: argparse.Namespace) -> None:
         )
         outcome = engine.ingest_transcript(transcript)
 
-        print(f"\n=== {txt_path.name} → entity {outcome.entity_id} ===")
+        print(f"\n=== {txt_path.name} -> entity {outcome.entity_id} ===")
         print(f"  domain          : {meta['domain']}")
         print(f"  claims ingested : {len(outcome.claim_ids)}")
         print(f"  confirmed       : {len(outcome.confirmed_claim_ids)}")
@@ -129,12 +129,12 @@ def cmd_ingest(args: argparse.Namespace) -> None:
         print(f"  gaps flagged    : {len(outcome.gap_flags)}")
         print(f"  conflicts       : {len(outcome.conflict_summaries)}")
         for s in outcome.slot_suggestions:
-            print(f"  slot suggestion : {s.slot_name} {s.current_lifecycle}→{s.suggested_lifecycle}")
+            print(f"  slot suggestion : {s.slot_name} {s.current_lifecycle}->{s.suggested_lifecycle}")
         for note in outcome.notes:
             print(f"  note            : {note}")
 
     engine.store.save(args.state)
-    print(f"\nstate saved → {args.state}")
+    print(f"\nstate saved -> {args.state}")
 
 
 def _entity_view(store: KnowledgeStore, entity) -> dict:

@@ -45,37 +45,10 @@ def probe_chat() -> None:
         print("ERROR:", type(exc).__name__, exc)
 
 
-def probe_embeddings() -> None:
-    print("\n=== EMBEDDINGS /embeddings ===")
-    for model in ("text-embedding-3-small", MODEL, "mimo-embedding"):
-        payload = {"model": model, "input": "cap rate real estate test"}
-        try:
-            r = httpx.post(f"{BASE}/embeddings", headers=headers, json=payload, timeout=60)
-            if r.status_code == 200:
-                data = r.json()
-                dim = len(data["data"][0]["embedding"])
-                print(f"model={model!r} status=200 OK dim={dim}")
-                return
-            print(f"model={model!r} status={r.status_code} body={r.text[:200]}")
-        except Exception as exc:  # noqa: BLE001 - diagnostics
-            print(f"model={model!r} ERROR {type(exc).__name__}: {exc}")
-
-
-def probe_models() -> None:
-    print("\n=== MODELS /models ===")
-    try:
-        r = httpx.get(f"{BASE}/models", headers=headers, timeout=30)
-        print("status:", r.status_code)
-        if r.status_code == 200:
-            print(json.dumps(r.json(), indent=2)[:800])
-        else:
-            print("body:", r.text[:300])
-    except Exception as exc:  # noqa: BLE001 - diagnostics
-        print("ERROR:", type(exc).__name__, exc)
+# /embeddings and /models endpoints do not exist on MiMo gateway (404/405 responses)
 
 
 if __name__ == "__main__":
     print(f"BASE={BASE} MODEL={MODEL}\n")
-    probe_models()
+    print("NOTE: MiMo gateway only supports /chat/completions (no /models or /embeddings endpoints)\n")
     probe_chat()
-    probe_embeddings()
