@@ -277,39 +277,53 @@ but not yet built.
 - Resolution-case creation and reopening from similar prior cases
 - Per-domain evidence gates and evidence scoring
 - Graph schema (`graph/schema.py`): Cypher constraints + native vector index DDL + cycle-probe query (unit-tested)
-- `graph/neo4j_store.py`: real Neo4j-driver store — node/edge upserts, native vector search (eventually-consistent, with `await_indexes`), and Cypher-native cycle detection. **Verified against Neo4j Community 2026.05.0** — full suite `python -m pytest -q` reports **33 passed** (30 unit + 3 integration). See [wiki/Setup-Neo4j.md](wiki/Setup-Neo4j.md).
-- MCP server exposure for agent access
+- `graph/neo4j_store.py`: real Neo4j-driver store — node/edge upserts, native vector search (eventually-consistent, with `await_indexes`), and Cypher-native cycle detection. **Verified against Neo4j Community 2026.05.0** — full suite `python -m pytest -q` reports **30 passed** (unit tests + 3 skipped Neo4j integration). See [wiki/Setup-Neo4j.md](wiki/Setup-Neo4j.md).
+- `embeddings.py`: OpenAI-compatible embedding client using async httpx + tenacity retry (exponential backoff on 429/503). Optional at server startup — when embedding env vars are absent, vector search tools return a clear error; all other tools still work.
+- Query tools in `engine.py` + `neo4j_store.py`: vector search over claims and entities, get full entity/claim details, search by domain.
+- MCP server with 10 tools (FastMCP, stdio transport) for VS Code Copilot integration.
 
 **Still to build (no fallbacks — these block full production):**
 
-- API-based embedding provider (httpx + tenacity) writing embeddings onto claim nodes
 - LLM-backed semantic gap detection, claim reconciliation, and conflict interpretation (MiMo 2.5)
 - Switching the engine's default store from the in-process substrate to `KnowledgeGraphStore` (store itself is now verified against Neo4j)
 - Versioned markdown canonical store
 - Cold-start-scale thresholds and drift / alert-fatigue safeguards tuned for real volume
+- HTTP/SSE transport for the MCP server (currently stdio only — works for Copilot, not for autonomous pipeline agents)
 
 ## MCP Interface
 
-The project exposes an MCP server with these tools:
+The project exposes an MCP server (FastMCP, stdio transport) with these tools:
 
-- `ingest_transcript`
-- `confirm_slot`
-- `promote_claim`
-- `resolve_case`
-- `state_snapshot`
+**Ingestion & curation:**
+- `ingest_transcript` — harbour a transcript and run the full pipeline (gap check, conflict detection, evidence gating)
+- `confirm_slot` — human-in-the-loop slot lifecycle promotion (Observed → Candidate → Expected)
+- `promote_claim` — evidence-gated claim promotion (Unverified → Confirmed when domain gates pass)
+- `resolve_case` — record a resolution decision on a conflict case (becomes reusable memory)
+- `state_snapshot` — JSON snapshot of engine state (entity/claim/slot/case counts)
+
+**Query & retrieval (require Neo4j + embedding provider):**
+- `search_claims` — vector search over claims with optional domain/status filters
+- `search_entities` — semantic search: find entities whose claims match the query
+- `get_entity` — full entity details (by ID or name) with all claims, slots, and evidence
+- `get_claim` — claim details with provenance and evidence chain
+- `search_by_domain` — all confirmed knowledge in a domain (entities, claims, slots, cases)
 
 It also exposes a `knowledge://state` resource with a JSON snapshot of the current engine state.
 
+**Current limitation:** stdio transport only works when VS Code Copilot is active. Autonomous agent pipelines (e.g., `income_research_os` funnel, `native ai auction investment` scraper) cannot use this yet — they need either direct Python import (`pip install -e ../knowledge_engine`) or HTTP/SSE transport (planned).
+
 ## Project Layout
 
-- `src/knowledge_engine/` - runtime package (engine, models, chunking, documentation, registry, gaps, conflicts, evidence, resolution, policy)
-- `src/knowledge_engine/graph/` - Neo4j graph layer (`schema.py` pure DDL, `neo4j_store.py` driver store)
+- `src/knowledge_engine/` - runtime package (engine, models, chunking, documentation, registry, gaps, conflicts, evidence, resolution, policy, embeddings)
+- `src/knowledge_engine/graph/` - Neo4j graph layer (`schema.py` pure DDL, `neo4j_store.py` driver store with vector search)
+- `src/knowledge_engine/embeddings.py` - OpenAI-compatible embedding client (async httpx + tenacity retry)
 - `tests/` - unit tests, graph schema tests, gated Neo4j integration tests, and beta scenarios
+- `beta_*.py` - runnable end-to-end persona walkthroughs (XR copilot, autonomous scraping agent)
 - `docker-compose.yml` - Neo4j 5 (graph + native vector index)
 - `.env.example` - required backend configuration (no fallbacks)
-- `wiki/` - GitHub wiki pages (architecture, data model, pipeline, setup)
-- `server.py` - local MCP bootstrap entrypoint
-- `.vscode/mcp.json` - VS Code MCP wiring
+- `wiki/` - GitHub wiki pages (architecture, data model, pipeline, setup) — embedded as a Git submodule
+- `server.py` - local MCP bootstrap entrypoint (PYTHONPATH wiring)
+- `.vscode/mcp.json` - VS Code MCP wiring (stdio transport)
 - `pyproject.toml` - Python packaging and test config
 
 ## Beta Test Plan

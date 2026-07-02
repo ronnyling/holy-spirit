@@ -3,7 +3,18 @@
     "knowledge-engine": {
       "type": "stdio",
       "command": "python",
-      "args": ["server.py"]
+      "args": ["server.py"],
+      "env": {
+        "KE_NEO4J_URI": "${env:KE_NEO4J_URI}",
+        "KE_NEO4J_USER": "${env:KE_NEO4J_USER}",
+        "KE_NEO4J_PASSWORD": "${env:KE_NEO4J_PASSWORD}",
+        "KE_NEO4J_DATABASE": "${env:KE_NEO4J_DATABASE}",
+        "KE_EMBEDDING_PROVIDER": "${env:KE_EMBEDDING_PROVIDER}",
+        "KE_EMBEDDING_MODEL": "${env:KE_EMBEDDING_MODEL}",
+        "KE_EMBEDDING_API_KEY": "${env:KE_EMBEDDING_API_KEY}",
+        "KE_EMBEDDING_API_BASE_URL": "${env:KE_EMBEDDING_API_BASE_URL}",
+        "KE_EMBEDDING_DIMENSIONS": "${env:KE_EMBEDDING_DIMENSIONS}"
+      }
     }
   }
 }

@@ -5,8 +5,10 @@ from uuid import uuid4
 
 from .conflicts import ConflictDetector, ConflictMatch
 from .contracts import ClaimDraft, ConflictSummary, EvidenceDraft, GapFlag, SlotSuggestion, TranscriptInput, TranscriptOutcome
+from .embeddings import EmbeddingClient
 from .evidence import EvidenceLedger
 from .gaps import GapDetector
+from .graph.neo4j_store import KnowledgeGraphStore
 from .learning import SlotLearner
 from .models import Claim, EpistemicStatus, Provenance, SlotLifecycle
 from .policy import get_domain_policy
@@ -16,8 +18,15 @@ from .store import KnowledgeStore
 
 
 class KnowledgeEngine:
-    def __init__(self, *, registry: TranscriptRegistry | None = None) -> None:
-        self.store = KnowledgeStore()
+    def __init__(
+        self,
+        *,
+        registry: TranscriptRegistry | None = None,
+        store: KnowledgeStore | KnowledgeGraphStore | None = None,
+        embedding_client: EmbeddingClient | None = None,
+    ) -> None:
+        self.store = store or KnowledgeStore()
+        self.embedding_client = embedding_client
         self.slot_learner = SlotLearner()
         self.gap_detector = GapDetector()
         self.conflict_detector = ConflictDetector()
@@ -175,6 +184,95 @@ class KnowledgeEngine:
             "slots": len(self.store.slots),
             "evidence": len(self.store.evidence),
         }
+
+    # -- query tools (vector search via Neo4j) ---------------------------------
+
+    def search_claims(
+        self,
+        query: str,
+        domain: str | None = None,
+        epistemic_status: str | None = None,
+        limit: int = 20,
+    ) -> dict[str, Any]:
+        """Vector search over claims. Returns matching claims with similarity scores."""
+        if not self._require_graph_store("search_claims"):
+            return {"error": "search_claims requires Neo4j graph store", "claims": []}
+        if not self._require_embeddings("search_claims"):
+            return {"error": "search_claims requires embedding provider", "claims": []}
+
+        embedding = self.embedding_client.embed_sync(query)
+        results = self.store.vector_search_claims(
+            embedding=embedding,
+            domain=domain,
+            epistemic_status=epistemic_status,
+            k=limit,
+        )
+        return {"query": query, "domain": domain, "count": len(results), "claims": results}
+
+    def search_entities(
+        self,
+        query: str,
+        domain: str | None = None,
+        limit: int = 20,
+    ) -> dict[str, Any]:
+        """Vector search: find claims like query, return their entities."""
+        if not self._require_graph_store("search_entities"):
+            return {"error": "search_entities requires Neo4j graph store", "entities": []}
+        if not self._require_embeddings("search_entities"):
+            return {"error": "search_entities requires embedding provider", "entities": []}
+
+        embedding = self.embedding_client.embed_sync(query)
+        results = self.store.vector_search_entities(
+            embedding=embedding,
+            domain=domain,
+            k=limit,
+        )
+        return {"query": query, "domain": domain, "count": len(results), "entities": results}
+
+    def get_entity(
+        self,
+        entity_id: str | None = None,
+        entity_name: str | None = None,
+    ) -> dict[str, Any]:
+        """Full entity details with claims, slots, evidence."""
+        if not self._require_graph_store("get_entity"):
+            return {"error": "get_entity requires Neo4j graph store"}
+
+        if entity_id:
+            result = self.store.get_entity_with_details(entity_id)
+        elif entity_name:
+            result = self.store.get_entity_by_name(entity_name)
+        else:
+            return {"error": "either entity_id or entity_name is required"}
+
+        if result is None:
+            return {"error": f"entity not found: {entity_id or entity_name}"}
+        return result
+
+    def get_claim(self, claim_id: str) -> dict[str, Any]:
+        """Claim details with provenance and evidence chain."""
+        if not self._require_graph_store("get_claim"):
+            return {"error": "get_claim requires Neo4j graph store"}
+
+        result = self.store.get_claim_detail(claim_id)
+        if result is None:
+            return {"error": f"claim not found: {claim_id}"}
+        return result
+
+    def search_by_domain(self, domain: str, limit: int = 50) -> dict[str, Any]:
+        """All confirmed knowledge in a domain."""
+        if not self._require_graph_store("search_by_domain"):
+            return {"error": "search_by_domain requires Neo4j graph store", "domain": domain}
+
+        return self.store.search_by_domain(domain=domain, limit=limit)
+
+    def _require_graph_store(self, tool_name: str) -> bool:
+        """Check that the store is a Neo4j graph store."""
+        return isinstance(self.store, KnowledgeGraphStore)
+
+    def _require_embeddings(self, tool_name: str) -> bool:
+        """Check that an embedding client is configured."""
+        return self.embedding_client is not None
 
     def _build_claim(self, transcript: TranscriptInput, entity_id: str, draft: ClaimDraft) -> Claim:
         return Claim(

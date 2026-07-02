@@ -368,6 +368,252 @@ class KnowledgeGraphStore:
             for r in rows
         ]
 
+    def vector_search_claims(
+        self,
+        *,
+        embedding: list[float],
+        domain: str | None = None,
+        epistemic_status: str | None = None,
+        k: int = 20,
+        min_score: float = 0.0,
+    ) -> list[dict]:
+        """Vector search over claims with optional domain and status filters.
+
+        Uses the native vector index for approximate nearest neighbor search.
+        """
+        if len(embedding) != self._embedding_dimensions:
+            raise ValueError(
+                f"query embedding length {len(embedding)} != index dimension "
+                f"{self._embedding_dimensions}"
+            )
+
+        # Fetch more than needed, then filter in Cypher
+        fetch_k = k * 3 if domain or epistemic_status else k
+
+        cypher = (
+            "CALL db.index.vector.queryNodes($index, $fetch_k, $embedding) "
+            "YIELD node, score "
+            "WHERE score >= $min_score"
+        )
+        params: dict = {
+            "index": schema.CLAIM_VECTOR_INDEX,
+            "fetch_k": fetch_k,
+            "embedding": embedding,
+            "min_score": min_score,
+        }
+
+        if domain:
+            cypher += " AND $domain IN node.tags"
+            params["domain"] = domain
+        if epistemic_status:
+            cypher += " AND node.epistemic_status = $status"
+            params["status"] = epistemic_status
+
+        cypher += (
+            " RETURN node.id AS id, node.statement AS statement, "
+            "       node.epistemic_status AS status, node.tags AS tags, "
+            "       node.slot_name AS slot_name, node.version AS version, "
+            "       score "
+            "ORDER BY score DESC LIMIT $limit"
+        )
+        params["limit"] = k
+
+        rows = self._run(cypher, **params)
+        return [
+            {
+                "claim_id": r["id"],
+                "statement": r["statement"],
+                "epistemic_status": r["status"],
+                "tags": r["tags"],
+                "slot_name": r["slot_name"],
+                "version": r["version"],
+                "similarity": r["score"],
+            }
+            for r in rows
+        ]
+
+    def vector_search_entities(
+        self,
+        *,
+        embedding: list[float],
+        domain: str | None = None,
+        k: int = 20,
+        min_score: float = 0.0,
+    ) -> list[dict]:
+        """Semantic search: find claims nearest to query, return their entities."""
+        if len(embedding) != self._embedding_dimensions:
+            raise ValueError(
+                f"query embedding length {len(embedding)} != index dimension "
+                f"{self._embedding_dimensions}"
+            )
+
+        fetch_k = k * 5  # need extra to deduplicate entities
+
+        cypher = (
+            "CALL db.index.vector.queryNodes($index, $fetch_k, $embedding) "
+            "YIELD node, score "
+            "WHERE score >= $min_score"
+        )
+        params: dict = {
+            "index": schema.CLAIM_VECTOR_INDEX,
+            "fetch_k": fetch_k,
+            "embedding": embedding,
+            "min_score": min_score,
+        }
+
+        if domain:
+            cypher += " AND $domain IN node.tags"
+            params["domain"] = domain
+
+        cypher += (
+            " MATCH (node)-[:ABOUT]->(e:Entity) "
+            " RETURN e.id AS entity_id, e.canonical_name AS name, "
+            "        e.description AS description, e.version AS version, "
+            "        score "
+            " ORDER BY score DESC LIMIT $limit"
+        )
+        params["limit"] = k
+
+        rows = self._run(cypher, **params)
+        seen: set[str] = set()
+        results: list[dict] = []
+        for r in rows:
+            eid = r["entity_id"]
+            if eid in seen:
+                continue
+            seen.add(eid)
+            results.append({
+                "entity_id": eid,
+                "canonical_name": r["name"],
+                "description": r["description"],
+                "version": r["version"],
+                "relevance_score": r["score"],
+            })
+        return results
+
+    def get_entity_with_details(self, entity_id: str) -> dict | None:
+        """Return entity + all its claims, slots, and evidence as a nested dict."""
+        rows = self._run(
+            "MATCH (e:Entity {id: $id}) "
+            "OPTIONAL MATCH (c:Claim)-[:ABOUT]->(e) "
+            "OPTIONAL MATCH (ev:Evidence)-[:SUPPORTS]->(c) "
+            "OPTIONAL MATCH (s:Slot)-[:OF]->(e) "
+            "RETURN e AS entity, "
+            "       collect(DISTINCT c) AS claims, "
+            "       collect(DISTINCT ev) AS evidence, "
+            "       collect(DISTINCT s) AS slots",
+            id=entity_id,
+        )
+        if not rows or not rows[0]["entity"]:
+            return None
+
+        r = rows[0]
+        entity = dict(r["entity"])
+        claims = [dict(c) for c in r["claims"] if c.get("id")]
+        evidence = [dict(ev) for ev in r["evidence"] if ev.get("id")]
+        slots = [dict(s) for s in r["slots"] if s.get("id")]
+
+        return {
+            "entity": entity,
+            "claims": claims,
+            "evidence": evidence,
+            "slots": slots,
+        }
+
+    def get_entity_by_name(self, entity_name: str) -> dict | None:
+        """Find entity by canonical name (case-insensitive) and return full details."""
+        rows = self._run(
+            "MATCH (e:Entity) "
+            "WHERE toLower(e.canonical_name) = toLower($name) "
+            "RETURN e.id AS id LIMIT 1",
+            name=entity_name,
+        )
+        if not rows:
+            return None
+        return self.get_entity_with_details(rows[0]["id"])
+
+    def get_claim_detail(self, claim_id: str) -> dict | None:
+        """Return full claim details with provenance and evidence chain."""
+        rows = self._run(
+            "MATCH (c:Claim {id: $id}) "
+            "OPTIONAL MATCH (ev:Evidence)-[:SUPPORTS]->(c) "
+            "OPTIONAL MATCH (c)-[:ABOUT]->(e:Entity) "
+            "RETURN c AS claim, e AS entity, collect(DISTINCT ev) AS evidence",
+            id=claim_id,
+        )
+        if not rows or not rows[0]["claim"]:
+            return None
+
+        r = rows[0]
+        claim = dict(r["claim"])
+        entity = dict(r["entity"]) if r["entity"] else None
+        evidence = [dict(ev) for ev in r["evidence"] if ev.get("id")]
+
+        return {
+            "claim": claim,
+            "entity": entity,
+            "evidence": evidence,
+        }
+
+    def search_by_domain(
+        self, *, domain: str, epistemic_status: str | None = None, limit: int = 50
+    ) -> dict:
+        """All confirmed knowledge in a domain — entities, claims, slots, cases."""
+        status_filter = epistemic_status or "Confirmed"
+
+        # Entities with claims in this domain
+        entity_rows = self._run(
+            "MATCH (c:Claim)-[:ABOUT]->(e:Entity) "
+            "WHERE $domain IN c.tags AND c.epistemic_status = $status "
+            "RETURN DISTINCT e.id AS id, e.canonical_name AS name, "
+            "       e.description AS description, e.version AS version "
+            "LIMIT $limit",
+            domain=domain,
+            status=status_filter,
+            limit=limit,
+        )
+
+        claim_rows = self._run(
+            "MATCH (c:Claim) "
+            "WHERE $domain IN c.tags AND c.epistemic_status = $status "
+            "RETURN c.id AS id, c.statement AS statement, c.slot_name AS slot_name, "
+            "       c.epistemic_status AS status, c.version AS version "
+            "LIMIT $limit",
+            domain=domain,
+            status=status_filter,
+            limit=limit,
+        )
+
+        slot_rows = self._run(
+            "MATCH (s:Slot)-[:OF]->(e:Entity) "
+            "MATCH (c:Claim)-[:ABOUT]->(e) "
+            "WHERE $domain IN c.tags "
+            "RETURN DISTINCT s.id AS id, s.name AS name, s.lifecycle AS lifecycle, "
+            "       s.observed_count AS observed_count, s.version AS version "
+            "LIMIT $limit",
+            domain=domain,
+            limit=limit,
+        )
+
+        case_rows = self._run(
+            "MATCH (rc:ResolutionCase)-[:RESOLVES]->(c:Claim) "
+            "WHERE $domain IN c.tags "
+            "RETURN DISTINCT rc.id AS id, rc.conflict_signature AS signature, "
+            "       rc.decision AS decision, rc.rationale AS rationale, "
+            "       rc.is_open AS is_open, rc.version AS version "
+            "LIMIT $limit",
+            domain=domain,
+            limit=limit,
+        )
+
+        return {
+            "domain": domain,
+            "entities": [dict(r) for r in entity_rows],
+            "claims": [dict(r) for r in claim_rows],
+            "slots": [dict(r) for r in slot_rows],
+            "resolution_cases": [dict(r) for r in case_rows],
+        }
+
     # -- diagnostics -----------------------------------------------------------
     def counts(self) -> dict[str, int]:
         labels = (
