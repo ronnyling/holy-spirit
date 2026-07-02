@@ -136,3 +136,46 @@ def test_engine_without_extractor_is_unchanged():
         )
     )
     assert outcome.claim_ids == []
+
+
+class MultiChunkStub:
+    """Returns different claims depending on which chunk it sees.
+
+    Both chunks emit a shared claim to exercise cross-chunk de-duplication.
+    """
+
+    def __init__(self) -> None:
+        self.calls: list[str] = []
+
+    def complete_sync(self, *, system: str, user: str) -> str:
+        self.calls.append(user)
+        if "ALPHA" in user:
+            return (
+                '[{"statement": "Shared claim.", "observed_slots": []}, '
+                '{"statement": "Alpha specific.", "observed_slots": ["a"]}]'
+            )
+        if "BETA" in user:
+            return (
+                '[{"statement": "Shared claim.", "observed_slots": []}, '
+                '{"statement": "Beta specific.", "observed_slots": ["b"]}]'
+            )
+        return "[]"
+
+
+def test_long_transcript_is_chunked_and_claims_deduped():
+    # Two large paragraphs -> two chunks (default max_chars=1200). ALPHA/BETA sit
+    # at the start of each paragraph so the overlap window can't leak the marker.
+    para_a = "ALPHA " + "alpha " * 150
+    para_b = "BETA " + "beta " * 150
+    text = para_a + "\n\n" + para_b
+
+    stub = MultiChunkStub()
+    drafts = ClaimExtractor(stub).extract(
+        domain="trading", entity_name="Long Doc", transcript_text=text
+    )
+
+    # Both chunks were sent to the LLM.
+    assert len(stub.calls) >= 2
+    # Shared claim appears once; each chunk's unique claim is kept.
+    statements = sorted(d.statement for d in drafts)
+    assert statements == ["Alpha specific.", "Beta specific.", "Shared claim."]

@@ -52,6 +52,12 @@ class KnowledgeStore:
         self.evidence[evidence.id] = evidence
         return evidence
 
+    def set_claim_status(self, *, claim_id: str, status: str) -> None:
+        """No-op: JSON store mutates the Claim object in-place via dict reference."""
+
+    def set_claim_embedding(self, *, claim_id: str, embedding: list[float]) -> None:
+        """No-op: JSON store mutates the Claim object in-place via dict reference."""
+
     def load_claim(self, claim_id: str) -> Claim:
         return self.claims[claim_id]
 

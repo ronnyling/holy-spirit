@@ -16,11 +16,74 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass
+from uuid import uuid4
 
 from neo4j import Driver, GraphDatabase
 
-from ..models import Claim, Entity, Evidence, ResolutionCase, Slot
+from ..models import Claim, Entity, Evidence, EpistemicStatus, Provenance, ResolutionCase, Slot, SlotLifecycle
+from ..utils import text_similarity
 from . import schema
+
+
+# ---------------------------------------------------------------------------
+# Row-to-model deserializers (convert Neo4j record dicts → Pydantic models)
+# ---------------------------------------------------------------------------
+
+def _row_to_claim(row: dict) -> Claim:
+    provenance_raw = row.get("provenance") or "[]"
+    try:
+        provenance_list = json.loads(provenance_raw) if isinstance(provenance_raw, str) else list(provenance_raw or [])
+    except (ValueError, TypeError):
+        provenance_list = []
+    return Claim(
+        id=row.get("id"),
+        entity_id=row.get("entity_id") or "",
+        statement=row.get("statement") or "",
+        slot_name=row.get("slot_name"),
+        epistemic_status=EpistemicStatus(row.get("epistemic_status") or "Unverified"),
+        provenance=[Provenance.model_validate(p) for p in provenance_list],
+        embedding=list(row["embedding"]) if row.get("embedding") else None,
+        version=int(row.get("version") or 1),
+        tags=list(row.get("tags") or []),
+    )
+
+
+def _row_to_slot(row: dict, entity_id: str) -> Slot:
+    return Slot(
+        id=row.get("id"),
+        entity_id=entity_id,
+        name=row.get("name") or "",
+        description=row.get("description"),
+        lifecycle=SlotLifecycle(row.get("lifecycle") or "Observed"),
+        observed_count=int(row.get("observed_count") or 0),
+        candidate_count=int(row.get("candidate_count") or 0),
+        expected_count=int(row.get("expected_count") or 0),
+        version=int(row.get("version") or 1),
+    )
+
+
+def _row_to_resolution_case(row: dict) -> ResolutionCase:
+    raw = row.get("conflicting_claim_ids")
+    if isinstance(raw, str):
+        try:
+            conflicting: list[str] = json.loads(raw)
+        except (ValueError, TypeError):
+            conflicting = []
+    elif isinstance(raw, list):
+        conflicting = list(raw)
+    else:
+        conflicting = []
+    return ResolutionCase(
+        id=row.get("id"),
+        conflict_signature=row.get("conflict_signature") or "",
+        conflicting_claim_ids=conflicting,
+        research_notes=row.get("research_notes"),
+        decision=row.get("decision"),
+        rationale=row.get("rationale"),
+        version=int(row.get("version") or 1),
+        is_open=bool(row.get("is_open", True)),
+        reopened_from_case_id=row.get("reopened_from_case_id"),
+    )
 
 
 class GraphCycleError(RuntimeError):
@@ -76,11 +139,50 @@ class KnowledgeGraphStore:
             dimensions=self._embedding_dimensions, similarity=similarity
         )
         with self._driver.session(database=self._database) as session:
+            self._assert_vector_index_dimensions(session)
             for statement in statements:
                 session.run(statement).consume()
             # Constraints and the native vector index populate asynchronously.
             # Block until they are online so the first query never races them.
             session.run("CALL db.awaitIndexes($seconds)", seconds=await_seconds).consume()
+
+    def _assert_vector_index_dimensions(self, session) -> None:
+        """Fail loudly if an existing claim vector index has the wrong dimension.
+
+        Neo4j's ``CREATE VECTOR INDEX ... IF NOT EXISTS`` is a no-op when an index
+        of the same name already exists, *even at a different dimension*. A stale
+        index (e.g. left by an earlier run using a different embedding model)
+        would then silently reject vectors of the current dimension.
+
+        We deliberately do **not** auto-drop the mismatched index: on some Neo4j
+        builds ``DROP`` of a populated vector index panics the store engine (the
+        drop is logged but fails to re-apply during recovery, wedging the whole
+        database). Instead we raise with actionable guidance so a human rebuilds
+        the index while the database is healthy. Callers degrade loudly to keyword
+        search — the JSON store remains the source of truth, so nothing is lost.
+        """
+
+        record = session.run(
+            "SHOW INDEXES YIELD name, type, options "
+            "WHERE name = $name AND type = 'VECTOR' RETURN options",
+            name=schema.CLAIM_VECTOR_INDEX,
+        ).single()
+        if record is None:
+            return
+        options = record["options"] or {}
+        index_config = options.get("indexConfig") or {}
+        existing = index_config.get("vector.dimensions")
+        if existing is not None and int(existing) != self._embedding_dimensions:
+            raise RuntimeError(
+                f"Vector index {schema.CLAIM_VECTOR_INDEX!r} exists at dimension "
+                f"{int(existing)} but the embedding provider produces "
+                f"{self._embedding_dimensions}-dim vectors. The index must be rebuilt "
+                f"to match: while the database is healthy run "
+                f"`DROP INDEX {schema.CLAIM_VECTOR_INDEX}`, then re-run ingest. Refusing "
+                f"to auto-drop — dropping a populated vector index can panic the store "
+                f"engine on some Neo4j builds, and writing mismatched-dimension vectors "
+                f"corrupts it."
+            )
 
     def await_indexes(self, *, seconds: int = 300) -> None:
         """Block until all indexes are online and have processed pending updates.
@@ -97,7 +199,45 @@ class KnowledgeGraphStore:
             return list(session.run(cypher, **params))
 
     # -- entities --------------------------------------------------------------
-    def upsert_entity(self, entity: Entity) -> None:
+    def upsert_entity(
+        self,
+        entity: Entity | None = None,
+        *,
+        canonical_name: str | None = None,
+        aliases: list[str] | None = None,
+        description: str | None = None,
+    ) -> Entity:
+        """Upsert entity. Accepts an Entity object (legacy/sync path) or keyword
+        args matching the KnowledgeStore interface (engine path).  When called
+        with keyword args a name-dedup query is run first so the same concept is
+        never assigned two different IDs.
+        """
+        if entity is None:
+            if not canonical_name:
+                raise ValueError("provide either entity or canonical_name")
+            rows = self._run(
+                "MATCH (e:Entity) "
+                "WHERE toLower(trim(e.canonical_name)) = toLower(trim($name)) "
+                "RETURN e.id AS id, e.canonical_name AS canonical_name, "
+                "       e.aliases AS aliases, e.description AS description, "
+                "       e.version AS version LIMIT 1",
+                name=canonical_name,
+            )
+            if rows:
+                r = rows[0]
+                return Entity(
+                    id=r["id"],
+                    canonical_name=r["canonical_name"],
+                    aliases=list(r["aliases"] or []),
+                    description=r["description"],
+                    version=int(r["version"] or 1),
+                )
+            entity = Entity(
+                id=uuid4().hex,
+                canonical_name=canonical_name,
+                aliases=aliases or [],
+                description=description,
+            )
         self._run(
             "MERGE (e:Entity {id: $id}) "
             "SET e.canonical_name = $canonical_name, "
@@ -110,6 +250,7 @@ class KnowledgeGraphStore:
             description=entity.description,
             version=entity.version,
         )
+        return entity
 
     def add_alias_edge(self, *, alias_entity_id: str, canonical_entity_id: str) -> None:
         self._run(
@@ -120,7 +261,9 @@ class KnowledgeGraphStore:
         )
 
     # -- claims ----------------------------------------------------------------
-    def add_claim(self, claim: Claim) -> None:
+    def add_claim(self, claim: Claim) -> Claim:
+        if not claim.id:
+            claim.id = uuid4().hex
         self._run(
             "MATCH (e:Entity {id: $entity_id}) "
             "MERGE (c:Claim {id: $id}) "
@@ -142,6 +285,7 @@ class KnowledgeGraphStore:
             version=claim.version,
             tags=claim.tags,
         )
+        return claim
 
     def set_claim_status(self, *, claim_id: str, status: str) -> None:
         self._run(
@@ -171,7 +315,9 @@ class KnowledgeGraphStore:
         )
 
     # -- evidence --------------------------------------------------------------
-    def add_evidence(self, evidence: Evidence) -> None:
+    def add_evidence(self, evidence: Evidence) -> Evidence:
+        if not evidence.id:
+            evidence.id = uuid4().hex
         self._run(
             "MATCH (c:Claim {id: $claim_id}) "
             "MERGE (ev:Evidence {id: $id}) "
@@ -189,6 +335,7 @@ class KnowledgeGraphStore:
             credibility=evidence.credibility,
             notes=evidence.notes,
         )
+        return evidence
 
     def would_create_cycle(self, *, source_claim_id: str, target_claim_id: str) -> bool:
         """True iff SUPPORTS(source -> target) would close a cycle. Native probe."""
@@ -250,7 +397,9 @@ class KnowledgeGraphStore:
         )
 
     # -- resolution cases ------------------------------------------------------
-    def add_resolution_case(self, case: ResolutionCase) -> None:
+    def add_resolution_case(self, case: ResolutionCase) -> ResolutionCase:
+        if not case.id:
+            case.id = uuid4().hex
         self._run(
             "MERGE (rc:ResolutionCase {id: $id}) "
             "SET rc.conflict_signature = $signature, "
@@ -258,7 +407,8 @@ class KnowledgeGraphStore:
             "    rc.decision = $decision, "
             "    rc.rationale = $rationale, "
             "    rc.version = $version, "
-            "    rc.is_open = $is_open",
+            "    rc.is_open = $is_open, "
+            "    rc.conflicting_claim_ids = $conflicting_claim_ids",
             id=case.id,
             signature=case.conflict_signature,
             research_notes=case.research_notes,
@@ -266,6 +416,7 @@ class KnowledgeGraphStore:
             rationale=case.rationale,
             version=case.version,
             is_open=case.is_open,
+            conflicting_claim_ids=json.dumps(case.conflicting_claim_ids),
         )
         for claim_id in case.conflicting_claim_ids:
             self._run(
@@ -274,6 +425,7 @@ class KnowledgeGraphStore:
                 case_id=case.id,
                 claim_id=claim_id,
             )
+        return case
 
     # -- transcripts & chunks --------------------------------------------------
     def upsert_transcript(
@@ -613,6 +765,259 @@ class KnowledgeGraphStore:
             "slots": [dict(r) for r in slot_rows],
             "resolution_cases": [dict(r) for r in case_rows],
         }
+
+    # -- KnowledgeStore interface — slots ----------------------------------------
+
+    def observe_slot(self, entity_id: str, slot_name: str, description: str | None = None) -> Slot:
+        name_lower = slot_name.strip().lower()
+        rows = self._run(
+            "MATCH (s:Slot)-[:OF]->(e:Entity {id: $entity_id}) "
+            "WHERE toLower(trim(s.name)) = $name_lower "
+            "SET s.observed_count = s.observed_count + 1 "
+            "RETURN s.id AS id, s.name AS name, s.lifecycle AS lifecycle, "
+            "       s.description AS description, s.observed_count AS observed_count, "
+            "       s.candidate_count AS candidate_count, s.expected_count AS expected_count, "
+            "       s.version AS version LIMIT 1",
+            entity_id=entity_id,
+            name_lower=name_lower,
+        )
+        if rows:
+            return _row_to_slot(dict(rows[0]), entity_id)
+        slot = Slot(id=uuid4().hex, entity_id=entity_id, name=slot_name,
+                    description=description, observed_count=1)
+        self.upsert_slot(slot)
+        return slot
+
+    def confirm_slot(self, entity_id: str, slot_name: str, target: SlotLifecycle, confirmed_by: str) -> Slot:
+        if not confirmed_by.strip():
+            raise ValueError("human confirmation is required to promote a slot")
+        slot = self.get_slot(entity_id, slot_name)
+        if slot is None:
+            raise ValueError(f"unknown slot: {slot_name}")
+        if target == SlotLifecycle.CANDIDATE:
+            if slot.observed_count < 3:
+                raise ValueError("slot needs at least 3 observations before candidate promotion")
+            slot.lifecycle = SlotLifecycle.CANDIDATE
+            slot.candidate_count += 1
+        elif target == SlotLifecycle.EXPECTED:
+            if slot.observed_count < 5:
+                raise ValueError("slot needs at least 5 observations before expected promotion")
+            slot.lifecycle = SlotLifecycle.EXPECTED
+            slot.expected_count += 1
+        elif target == SlotLifecycle.RETIRED:
+            slot.lifecycle = SlotLifecycle.RETIRED
+        else:
+            slot.lifecycle = target
+        self.upsert_slot(slot)
+        return slot
+
+    def get_slot(self, entity_id: str, slot_name: str) -> Slot | None:
+        name_lower = slot_name.strip().lower()
+        rows = self._run(
+            "MATCH (s:Slot)-[:OF]->(e:Entity {id: $entity_id}) "
+            "WHERE toLower(trim(s.name)) = $name_lower "
+            "RETURN s.id AS id, s.name AS name, s.lifecycle AS lifecycle, "
+            "       s.description AS description, s.observed_count AS observed_count, "
+            "       s.candidate_count AS candidate_count, s.expected_count AS expected_count, "
+            "       s.version AS version LIMIT 1",
+            entity_id=entity_id, name_lower=name_lower,
+        )
+        return _row_to_slot(dict(rows[0]), entity_id) if rows else None
+
+    def get_slots_for_entity(self, entity_id: str) -> list[Slot]:
+        rows = self._run(
+            "MATCH (s:Slot)-[:OF]->(e:Entity {id: $entity_id}) "
+            "RETURN s.id AS id, s.name AS name, s.lifecycle AS lifecycle, "
+            "       s.description AS description, s.observed_count AS observed_count, "
+            "       s.candidate_count AS candidate_count, s.expected_count AS expected_count, "
+            "       s.version AS version",
+            entity_id=entity_id,
+        )
+        return [_row_to_slot(dict(r), entity_id) for r in rows]
+
+    def get_expected_slots(self, entity_id: str) -> list[Slot]:
+        rows = self._run(
+            "MATCH (s:Slot)-[:OF]->(e:Entity {id: $entity_id}) "
+            "WHERE s.lifecycle = 'Expected' "
+            "RETURN s.id AS id, s.name AS name, s.lifecycle AS lifecycle, "
+            "       s.description AS description, s.observed_count AS observed_count, "
+            "       s.candidate_count AS candidate_count, s.expected_count AS expected_count, "
+            "       s.version AS version",
+            entity_id=entity_id,
+        )
+        return [_row_to_slot(dict(r), entity_id) for r in rows]
+
+    # -- KnowledgeStore interface — claims -------------------------------------
+
+    def load_claim(self, claim_id: str) -> Claim:
+        rows = self._run(
+            "MATCH (c:Claim {id: $id})-[:ABOUT]->(e:Entity) "
+            "RETURN c.id AS id, e.id AS entity_id, c.statement AS statement, "
+            "       c.slot_name AS slot_name, c.epistemic_status AS epistemic_status, "
+            "       c.provenance AS provenance, c.embedding AS embedding, "
+            "       c.version AS version, c.tags AS tags LIMIT 1",
+            id=claim_id,
+        )
+        if not rows:
+            raise KeyError(f"claim not found: {claim_id}")
+        return _row_to_claim(dict(rows[0]))
+
+    def list_claims_for_entity(self, entity_id: str) -> list[Claim]:
+        rows = self._run(
+            "MATCH (c:Claim)-[:ABOUT]->(e:Entity {id: $entity_id}) "
+            "RETURN c.id AS id, e.id AS entity_id, c.statement AS statement, "
+            "       c.slot_name AS slot_name, c.epistemic_status AS epistemic_status, "
+            "       c.provenance AS provenance, c.embedding AS embedding, "
+            "       c.version AS version, c.tags AS tags",
+            entity_id=entity_id,
+        )
+        return [_row_to_claim(dict(r)) for r in rows]
+
+    def list_canonical_claims(self, entity_id: str) -> list[Claim]:
+        rows = self._run(
+            "MATCH (c:Claim)-[:ABOUT]->(e:Entity {id: $entity_id}) "
+            "WHERE c.epistemic_status = 'Confirmed' "
+            "RETURN c.id AS id, e.id AS entity_id, c.statement AS statement, "
+            "       c.slot_name AS slot_name, c.epistemic_status AS epistemic_status, "
+            "       c.provenance AS provenance, c.embedding AS embedding, "
+            "       c.version AS version, c.tags AS tags",
+            entity_id=entity_id,
+        )
+        return [_row_to_claim(dict(r)) for r in rows]
+
+    # -- KnowledgeStore interface — resolution cases ---------------------------
+
+    def get_resolution_case(self, case_id: str) -> ResolutionCase:
+        rows = self._run(
+            "MATCH (rc:ResolutionCase {id: $id}) "
+            "RETURN rc.id AS id, rc.conflict_signature AS conflict_signature, "
+            "       rc.research_notes AS research_notes, rc.decision AS decision, "
+            "       rc.rationale AS rationale, rc.version AS version, "
+            "       rc.is_open AS is_open, rc.reopened_from_case_id AS reopened_from_case_id, "
+            "       rc.conflicting_claim_ids AS conflicting_claim_ids LIMIT 1",
+            id=case_id,
+        )
+        if not rows:
+            raise KeyError(f"resolution case not found: {case_id}")
+        return _row_to_resolution_case(dict(rows[0]))
+
+    def find_similar_case(self, conflict_signature: str, threshold: float = 0.8) -> ResolutionCase | None:
+        rows = self._run(
+            "MATCH (rc:ResolutionCase) "
+            "RETURN rc.id AS id, rc.conflict_signature AS conflict_signature, "
+            "       rc.research_notes AS research_notes, rc.decision AS decision, "
+            "       rc.rationale AS rationale, rc.version AS version, "
+            "       rc.is_open AS is_open, rc.reopened_from_case_id AS reopened_from_case_id, "
+            "       rc.conflicting_claim_ids AS conflicting_claim_ids"
+        )
+        best: ResolutionCase | None = None
+        best_score = threshold
+        for row in rows:
+            score = text_similarity(row["conflict_signature"] or "", conflict_signature)
+            if score >= best_score:
+                best = _row_to_resolution_case(dict(row))
+                best_score = score
+        return best
+
+    # -- KnowledgeStore interface — state snapshot -----------------------------
+
+    def snapshot(self) -> dict[str, int]:
+        def _count(cypher: str, **params: object) -> int:
+            rows = self._run(cypher, **params)
+            return int(rows[0]["c"]) if rows else 0
+        return {
+            "entities": _count("MATCH (n:Entity) RETURN count(n) AS c"),
+            "claims": _count("MATCH (n:Claim) RETURN count(n) AS c"),
+            "confirmed_claims": _count(
+                "MATCH (n:Claim) WHERE n.epistemic_status = 'Confirmed' RETURN count(n) AS c"
+            ),
+            "evidence": _count("MATCH (n:Evidence) RETURN count(n) AS c"),
+            "slots": _count("MATCH (n:Slot) RETURN count(n) AS c"),
+            "resolution_cases": _count("MATCH (n:ResolutionCase) RETURN count(n) AS c"),
+            "open_cases": _count(
+                "MATCH (n:ResolutionCase) WHERE n.is_open = true RETURN count(n) AS c"
+            ),
+        }
+
+    # -- Domain discovery -------------------------------------------------------
+
+    def list_domains(self) -> list[str]:
+        """All distinct domain tags present on stored claims."""
+        rows = self._run(
+            "MATCH (c:Claim) UNWIND c.tags AS tag RETURN DISTINCT tag ORDER BY tag"
+        )
+        return [r["tag"] for r in rows if r["tag"]]
+
+    # -- Cross-domain pattern detection ----------------------------------------
+
+    def find_cross_domain_patterns(
+        self,
+        *,
+        domains: list[str] | None = None,
+        min_similarity: float = 0.7,
+        limit: int = 20,
+    ) -> list[dict]:
+        """Find semantically similar claims from different domains.
+
+        Samples up to 50 source claims, vector-searches for their nearest
+        neighbours, and surfaces pairs whose domain tags are disjoint.
+        """
+        if domains:
+            source_rows = self._run(
+                "MATCH (c:Claim) "
+                "WHERE any(t IN $domains WHERE t IN c.tags) AND c.embedding IS NOT NULL "
+                "RETURN c.id AS id, c.statement AS statement, c.tags AS tags, "
+                "       c.embedding AS embedding, c.epistemic_status AS status LIMIT 50",
+                domains=domains,
+            )
+        else:
+            source_rows = self._run(
+                "MATCH (c:Claim) WHERE c.embedding IS NOT NULL "
+                "RETURN c.id AS id, c.statement AS statement, c.tags AS tags, "
+                "       c.embedding AS embedding, c.epistemic_status AS status LIMIT 50"
+            )
+
+        patterns: list[dict] = []
+        seen_pairs: set[frozenset] = set()
+
+        for row in source_rows:
+            if len(patterns) >= limit:
+                break
+            source_id: str = row["id"]
+            source_tags: set[str] = set(row["tags"] or [])
+            embedding = row.get("embedding")
+            if not embedding:
+                continue
+            similar = self.find_similar_claims(
+                embedding=list(embedding), k=10, min_score=min_similarity
+            )
+            for sim in similar:
+                if sim.claim_id == source_id:
+                    continue
+                pair: frozenset = frozenset([source_id, sim.claim_id])
+                if pair in seen_pairs:
+                    continue
+                tag_rows = self._run(
+                    "MATCH (c:Claim {id: $id}) RETURN c.tags AS tags, c.epistemic_status AS status",
+                    id=sim.claim_id,
+                )
+                if not tag_rows:
+                    continue
+                neighbour_tags: set[str] = set(tag_rows[0]["tags"] or [])
+                if source_tags and neighbour_tags and source_tags.isdisjoint(neighbour_tags):
+                    seen_pairs.add(pair)
+                    patterns.append({
+                        "claim_a": {"id": source_id, "statement": row["statement"],
+                                    "domains": sorted(source_tags), "status": row["status"]},
+                        "claim_b": {"id": sim.claim_id, "statement": sim.statement,
+                                    "domains": sorted(neighbour_tags), "status": tag_rows[0]["status"]},
+                        "similarity": sim.score,
+                    })
+                    if len(patterns) >= limit:
+                        break
+
+        patterns.sort(key=lambda x: x["similarity"], reverse=True)
+        return patterns[:limit]
 
     # -- diagnostics -----------------------------------------------------------
     def counts(self) -> dict[str, int]:

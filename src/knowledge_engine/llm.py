@@ -14,17 +14,56 @@ engine keeps working in manual-claims mode without an LLM.
 
 from __future__ import annotations
 
-import asyncio
 import os
 
 import httpx
-from tenacity import retry, retry_if_exception, stop_after_attempt, wait_exponential
+from tenacity import (
+    Retrying,
+    retry,
+    retry_if_exception,
+    stop_after_attempt,
+    wait_exponential,
+)
 
 
 def _is_retryable(exc: BaseException) -> bool:
+    if isinstance(exc, LLMEmptyResponseError):
+        # Transient reasoning-model glitch (empty content) — worth another attempt.
+        return True
     if isinstance(exc, httpx.HTTPStatusError):
         return exc.response.status_code in (429, 500, 502, 503, 504)
     return isinstance(exc, (httpx.TimeoutException, httpx.ConnectError))
+
+
+class LLMEmptyResponseError(RuntimeError):
+    """The model returned no usable content. Retryable — NOT a silent empty result."""
+
+
+class LLMTruncatedError(RuntimeError):
+    """The completion hit max_tokens (finish_reason=length). Not retryable at the
+    same budget — raised loudly with an actionable message instead of returning
+    a half-formed answer."""
+
+
+def _content_or_raise(data: dict, max_tokens: int) -> str:
+    """Return non-empty assistant content, or raise loudly.
+
+    MiMo v2.5 is a reasoning model: it emits `reasoning_content` plus the answer
+    in `content`, and `content` can come back empty (or truncated when reasoning
+    eats the token budget). Returning that empty string would be a silent
+    degradation to "0 claims" — instead we surface it: truncation is a hard error
+    with an actionable message; a merely-empty answer is retryable upstream.
+    """
+    choice = (data.get("choices") or [{}])[0]
+    content = ((choice.get("message") or {}).get("content") or "")
+    if choice.get("finish_reason") == "length":
+        raise LLMTruncatedError(
+            f"completion truncated at max_tokens={max_tokens} "
+            "(reasoning likely consumed the budget); raise max_tokens or shorten the input"
+        )
+    if not content.strip():
+        raise LLMEmptyResponseError("model returned empty content")
+    return content
 
 
 class MiMoClient:
@@ -50,6 +89,7 @@ class MiMoClient:
         self.model = model
         self.api_key = api_key
         self.base_url = base_url.rstrip("/") or "https://api.openai.com/v1"
+        self._timeout = timeout
         self._client = httpx.AsyncClient(timeout=timeout)
 
     @classmethod
@@ -76,7 +116,7 @@ class MiMoClient:
         system: str,
         user: str,
         temperature: float = 0.0,
-        max_tokens: int = 2000,
+        max_tokens: int = 4000,
     ) -> str:
         """Return the assistant message content for a system+user prompt."""
         url = f"{self.base_url}/chat/completions"
@@ -93,7 +133,7 @@ class MiMoClient:
         resp = await self._client.post(url, json=payload, headers=headers)
         resp.raise_for_status()
         data = resp.json()
-        return data["choices"][0]["message"]["content"]
+        return _content_or_raise(data, max_tokens)
 
     def complete_sync(
         self,
@@ -101,14 +141,40 @@ class MiMoClient:
         system: str,
         user: str,
         temperature: float = 0.0,
-        max_tokens: int = 2000,
+        max_tokens: int = 4000,
     ) -> str:
-        """Synchronous wrapper for sync call sites (engine.ingest is sync)."""
-        return asyncio.run(
-            self.complete(
-                system=system, user=user, temperature=temperature, max_tokens=max_tokens
-            )
-        )
+        """Synchronous chat completion for sync call sites (engine.ingest is sync).
+
+        Uses a short-lived synchronous httpx.Client per call (mirroring
+        EmbeddingClient._post_sync) rather than asyncio.run() over a persistent
+        AsyncClient. Reusing an async connection pool across the fresh event
+        loops that repeated asyncio.run() creates raises 'Event loop is closed'
+        on the 2nd+ call on Windows (proactor loop) — this avoids that entirely.
+        """
+        url = f"{self.base_url}/chat/completions"
+        headers = {"Authorization": f"Bearer {self.api_key}"}
+        payload: dict = {
+            "model": self.model,
+            "messages": [
+                {"role": "system", "content": system},
+                {"role": "user", "content": user},
+            ],
+            "temperature": temperature,
+            "max_tokens": max_tokens,
+        }
+        for attempt in Retrying(
+            retry=retry_if_exception(_is_retryable),
+            wait=wait_exponential(multiplier=1, min=1, max=16),
+            stop=stop_after_attempt(4),
+            reraise=True,
+        ):
+            with attempt:
+                with httpx.Client(timeout=self._timeout) as client:
+                    resp = client.post(url, json=payload, headers=headers)
+                    resp.raise_for_status()
+                    data = resp.json()
+                    return _content_or_raise(data, max_tokens)
+        raise RuntimeError("unreachable")  # pragma: no cover
 
     async def close(self) -> None:
         await self._client.aclose()

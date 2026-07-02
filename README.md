@@ -69,10 +69,10 @@ python scripts/ke.py ask --query "cap rate suburban"     # keyword search
 python scripts/ke.py snapshot
 ```
 
-> **Storage status:** the CLI uses the in-memory store persisted to
-> `data/uat_state.json`. The engine's ingest pipeline is not yet wired to Neo4j
-> (the Neo4j store currently implements only the query/vector side). See
-> [Known limitations](docs/UAT-Usage-Guide.md#known-limitations).
+> **Storage:** when `KE_NEO4J_URI` is set and Neo4j is reachable the CLI uses it as the
+> **primary store** — all ingest writes go directly to the graph. When Neo4j is absent
+> it falls back to the file-backed JSON store (`data/uat_state.json`) with a loud stderr
+> warning. See [docs/UAT-Usage-Guide.md](docs/UAT-Usage-Guide.md) for the full setup.
 
 
 ## Product goals
@@ -307,21 +307,26 @@ but not yet built.
 - Resolution-case creation and reopening from similar prior cases
 - Per-domain evidence gates and evidence scoring
 - Graph schema (`graph/schema.py`): Cypher constraints + native vector index DDL + cycle-probe query (unit-tested)
-- `graph/neo4j_store.py`: real Neo4j-driver store — node/edge upserts, native vector search (eventually-consistent, with `await_indexes`), and Cypher-native cycle detection. **Verified against Neo4j Community 2026.05.0** — full suite `python -m pytest -q` reports **59 passed** (57 without the two live Ollama embedding e2e tests, which run only when Ollama is serving; Neo4j integration tests run when a database is reachable, otherwise skipped). See [wiki/Setup-Neo4j.md](wiki/Setup-Neo4j.md).
+- `graph/neo4j_store.py`: real Neo4j-driver store — full read/write interface (node/edge upserts for all entity types, native vector search, Cypher-native cycle detection, domain listing, cross-domain pattern discovery). **Verified against Neo4j Community 2026.05.0** — full suite `python -m pytest -q` reports **87 passed** (Neo4j integration tests run when a database is reachable, otherwise skipped). See [wiki/Setup-Neo4j.md](wiki/Setup-Neo4j.md).
 - `embeddings.py`: embedding transport with two backends — local **Ollama-native** (`/api/embed`, default `bge-m3`, 1024-dim) and OpenAI-compatible (`/v1/embeddings`) — on async httpx + tenacity retry (exponential backoff on 429/503). Embedding is treated as **housekeeping**: the model is loaded on demand for a batch (`warm()`, `keep_alive=5m`) and released immediately afterwards (`unload_sync()`, `keep_alive=0`), so an idle engine holds no model in memory. Input is **batched** (`batch_size`, default 64) and **context-bounded** (`num_ctx`, default 1024) per request. Optional at server startup — when embedding env vars are absent, vector search tools return a clear error; all other tools still work.
 - `llm.py` + `extraction.py`: MiMo (OpenAI-compatible) chat client and LLM-backed claim extraction. **Verified live against the MiMo gateway** (`https://api.xiaomimimo.com/v1`, `mimo-v2.5`, `tp-` token-plan key — chat returns 200). When `KE_MIMO_API_KEY` is set and a transcript arrives with no hand-authored claims, claims are extracted from the raw text. Extraction is the **unbounded** layer; parsing/validation is deterministic and **never fabricates evidence**, so extracted claims enter as `Unverified`. Optional and non-breaking (unit-tested with a stubbed client).
-- `scripts/ke.py`: command-line interface for ingest + query on the file-backed store — the recommended UAT surface. See [docs/UAT-Usage-Guide.md](docs/UAT-Usage-Guide.md).
-- `store.py` JSON persistence (`save`/`load`) so an ingested corpus survives across CLI runs.
-- Query tools in `engine.py` + `neo4j_store.py`: vector search over claims and entities, get full entity/claim details, search by domain.
-- MCP server with 10 tools (FastMCP, stdio transport) for VS Code Copilot integration.
+- `scripts/ke.py`: command-line interface for ingest + query. When `KE_NEO4J_URI` is set, Neo4j is the primary store and all ingest writes go directly to the graph; otherwise falls back to the file-backed JSON store. See [docs/UAT-Usage-Guide.md](docs/UAT-Usage-Guide.md).
+- `store.py` JSON persistence (`save`/`load`) for the fallback store path.
+- Query tools in `engine.py` + `neo4j_store.py`: vector search over claims and entities, get full entity/claim details, search by domain, list domains, cross-domain pattern discovery.
+- Parallel transcript preparation in `ke.py ingest` — LLM extraction is parallelized across workers (default 5, capped by file count) using `ThreadPoolExecutor`.
+- Auto domain classification with open-domain fallback: `classify()` tries known domains first; if no match, `classify_open()` asks the LLM to name a free-form domain (2–4 words) and auto-registers it in the policy registry via `register_domain()`.
+- Dynamic domain policy registry (`policy.py`): new domains discovered at ingest time are registered automatically with sensible defaults; `list_policy_domains()` enumerates all known domains (static + dynamic).
+- `evidence_hunter.py`: automated evidence sourcing for `Unverified` claims — generates a neutral search query, executes web search (Tavily), extracts evidence via LLM, evaluates against the per-domain bar, and auto-promotes if the gate is satisfied. Domain credibility ceilings: real estate 0.7, TCM 0.4, trading 0.3. Requires `pip install tavily-python` + `KE_TAVILY_API_KEY`.
+- MCP server with 13 tools (FastMCP, stdio transport) for VS Code Copilot integration.
 
 **Still to build (no fallbacks — these block full production):**
 
-- **Neo4j write-path adapter (top priority).** The engine's ingest pipeline currently targets the in-memory `KnowledgeStore`. The `KnowledgeGraphStore` implements only the query/vector side with a different interface, so the MCP server's *ingestion* tools do not yet persist to Neo4j. The engine needs `KnowledgeGraphStore` to implement the same interface it expects (`upsert_entity(name)→Entity`, `add_claim→Claim`, `observe_slot`, `get_slot`, `confirm_slot`, `list_canonical_claims`, `get_expected_slots`, resolution-case methods, and dict-like accessors).
-- LLM-backed semantic gap detection, claim reconciliation, and conflict interpretation (MiMo 2.5). The MiMo chat client is live (see above); these three specific LLM steps are not yet built on top of it.
-- Versioned markdown canonical store
-- Cold-start-scale thresholds and drift / alert-fatigue safeguards tuned for real volume
-- HTTP/SSE transport for the MCP server (currently stdio only — works for Copilot, not for autonomous pipeline agents)
+- LLM-backed semantic gap detection, claim reconciliation, and conflict interpretation (MiMo 2.5). The MiMo chat client is live; these three specific LLM steps are not yet built on top of it.
+- `ke hunt <claim_id>` CLI subcommand and `--hunt-evidence` ingest flag to wire `EvidenceHunter` into the pipeline automatically.
+- Versioned markdown canonical store.
+- Cold-start-scale thresholds and drift / alert-fatigue safeguards tuned for real volume.
+- HTTP/SSE transport for the MCP server (currently stdio only — works for Copilot, not for autonomous pipeline agents).
+- Tests for `evidence_hunter.py` (requires mocked LLM + `SearchProvider`).
 
 ## MCP Interface
 
@@ -341,16 +346,22 @@ The project exposes an MCP server (FastMCP, stdio transport) with these tools:
 - `get_claim` — claim details with provenance and evidence chain
 - `search_by_domain` — all confirmed knowledge in a domain (entities, claims, slots, cases)
 
+**Domain discovery & cross-domain patterns (require Neo4j):**
+- `list_domains` — lists all ingested domains (from claim tags) alongside all policy-registered domains
+- `explore_domain` — full epistemic state of a domain: confirmed, unverified, and disputed claims with summary counts
+- `find_cross_domain_patterns` — surface claim pairs from different domains with semantic similarity above a threshold
+
 It also exposes a `knowledge://state` resource with a JSON snapshot of the current engine state.
 
 **Current limitations:**
-- **Ingestion tools are not yet wired to Neo4j.** The engine pipeline targets the in-memory store; a `KnowledgeGraphStore` write-adapter is required before `ingest_transcript` (and the other curation tools) persist to Neo4j via the server. For working ingest + query today, use the CLI (`scripts/ke.py`, file-backed store) — see [docs/UAT-Usage-Guide.md](docs/UAT-Usage-Guide.md).
 - stdio transport only works when VS Code Copilot is active. Autonomous agent pipelines (e.g., `income_research_os` funnel, `native ai auction investment` scraper) cannot use this yet — they need either direct Python import (`pip install -e ../knowledge_engine`) or HTTP/SSE transport (planned).
+- Domain discovery tools (`list_domains`, `explore_domain`, `find_cross_domain_patterns`) require Neo4j as the primary store; they return an error if the engine is on the JSON fallback path.
 
 ## Project Layout
 
-- `src/knowledge_engine/` - runtime package (engine, models, chunking, documentation, registry, gaps, conflicts, evidence, resolution, policy, embeddings)
-- `src/knowledge_engine/graph/` - Neo4j graph layer (`schema.py` pure DDL, `neo4j_store.py` driver store with vector search)
+- `src/knowledge_engine/` - runtime package (engine, models, chunking, documentation, registry, gaps, conflicts, evidence, resolution, policy, classification, embeddings)
+- `src/knowledge_engine/evidence_hunter.py` - automated web-evidence sourcing for Unverified claims (pluggable `SearchProvider`, Tavily default, domain credibility ceilings)
+- `src/knowledge_engine/graph/` - Neo4j graph layer (`schema.py` pure DDL, `neo4j_store.py` full read/write driver store with vector search, domain listing, and cross-domain patterns)
 - `src/knowledge_engine/embeddings.py` - embedding client: Ollama-native (`/api/embed`) + OpenAI-compatible transport, on-demand model lifecycle (`warm()`/`unload_sync()`), batching + `num_ctx` (async httpx + tenacity retry)
 - `src/knowledge_engine/llm.py` - MiMo (OpenAI-compatible) chat client (async httpx + tenacity retry)
 - `src/knowledge_engine/extraction.py` - LLM-backed claim extraction (unbounded LLM + deterministic parsing)

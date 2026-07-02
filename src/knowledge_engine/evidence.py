@@ -33,8 +33,9 @@ class EvidenceLedger:
             score += draft.credibility
 
             if draft.source_kind == "internal_wiki":
-                source_claim = store.claims.get(draft.source_id)
-                if source_claim is None:
+                try:
+                    source_claim = store.load_claim(draft.source_id)
+                except (KeyError, Exception):
                     reasons.append(f"internal source claim {draft.source_id} does not exist")
                     continue
                 if source_claim.epistemic_status != EpistemicStatus.CONFIRMED:
@@ -70,8 +71,9 @@ class EvidenceLedger:
         return recorded
 
     def attach_internal_support(self, source_claim_id: str, target_claim_id: str, store: KnowledgeStore) -> None:
-        source_claim = store.claims.get(source_claim_id)
-        if source_claim is None:
+        try:
+            source_claim = store.load_claim(source_claim_id)
+        except (KeyError, Exception):
             raise ValueError(f"unknown source claim: {source_claim_id}")
         if source_claim.epistemic_status != EpistemicStatus.CONFIRMED:
             raise ValueError(f"source claim {source_claim_id} is not confirmed")

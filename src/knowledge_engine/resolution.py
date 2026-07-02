@@ -1,13 +1,18 @@
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
 from .conflicts import ConflictMatch
 from .models import ResolutionCase
 from .store import KnowledgeStore
 from .utils import normalize_text
 
+if TYPE_CHECKING:
+    from .graph.neo4j_store import KnowledgeGraphStore
+
 
 class ResolutionMemory:
-    def __init__(self, store: KnowledgeStore) -> None:
+    def __init__(self, store: KnowledgeStore | KnowledgeGraphStore) -> None:
         self.store = store
 
     def open_case(self, conflict: ConflictMatch) -> ResolutionCase:

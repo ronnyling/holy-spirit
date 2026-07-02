@@ -4,9 +4,11 @@ A step-by-step guide to ingest transcripts and ask research questions during
 UAT. Written to be honest about what works today and what does not.
 
 > **TL;DR** — Use the CLI (`scripts/ke.py`). Put transcript `.txt` files in a
-> folder, run `ingest`, then `ask`. Today the pipeline runs on a local
-> file-backed store (`data/uat_state.json`), not Neo4j (see
-> [Known limitations](#known-limitations)).
+> folder, run `ingest`, then `ask`. The funnel runs on a local file-backed
+> store (`data/uat_state.json`, the source of truth); when Ollama `bge-m3` and
+> Neo4j are configured, claims are also embedded and mirrored into a Neo4j
+> vector index so `ask --query` does real semantic search (keyword fallback
+> otherwise). See [Known limitations](#known-limitations).
 
 ---
 
@@ -84,7 +86,7 @@ python scripts/ke.py ask --entity "Cap Rate Rules"
 | Requirement | Status | Notes |
 |---|---|---|
 | Python 3.14 | required | `python --version` |
-| Neo4j running | optional for CLI | only needed for the MCP server / vector search path |
+| Neo4j running | recommended for CLI | required for semantic `ask --query`; without it the CLI falls back to keyword search |
 | `.env` configured | required | copied from `.env.example`, secrets filled |
 | MiMo LLM key | optional | enables auto-extraction from raw text |
 | Ollama + `bge-m3` | recommended | local embeddings provider (no key); claims are embedded at ingest |
@@ -216,6 +218,17 @@ What the pipeline did automatically (deterministic):
    content short-circuits the pipeline and skips this entirely.
 
 The full corpus is saved to `data/uat_state.json` so later `ask` runs see it.
+Parallel transcript prep defaults to 5 workers; override it with `--workers` or `KE_INGEST_WORKERS` if you want to tune throughput.
+
+### Output artifacts from a run
+
+When the CLI runs ingest, it writes these persistent outputs:
+
+- `data/uat_state.json` - the canonical JSON store for entities, claims, evidence, slots, and resolution cases.
+- `data/uat_state.ingested.json` - the deduplication ledger that records content hashes for successfully ingested transcripts.
+- Neo4j mirror data - when embeddings and Neo4j are configured, new claims are also mirrored into the vector index for semantic `ask --query`.
+
+The CLI also prints a per-file result summary to stdout/stderr, but the JSON files above are the durable on-disk outputs.
 
 ---
 
@@ -228,7 +241,7 @@ python scripts/ke.py ask --entity "Cap Rate Rules"
 # All claims in a domain
 python scripts/ke.py ask --domain "real estate"
 
-# Keyword search across all claims (no embeddings required)
+# Semantic vector search (Ollama bge-m3 + Neo4j); keyword fallback if unavailable
 python scripts/ke.py ask --query "cap rate suburban"
 
 # One claim with its evidence chain
@@ -277,9 +290,9 @@ Per-domain evidence bars:
 
 | Limitation | Impact | To fix |
 |---|---|---|
-| **Neo4j ingest not wired** | The engine's ingest pipeline targets the in-memory store; the Neo4j store implements only the query/vector side with a different interface. The MCP server's *ingestion* tools therefore don't work against Neo4j yet. | Build a `KnowledgeGraphStore` adapter that implements the same interface the engine expects (`upsert_entity(name)→Entity`, `add_claim→Claim`, `observe_slot`, `confirm_slot`, `list_canonical_claims`, `get_expected_slots`, ...). Approved-layer work. |
+| **Engine funnel is not graph-native** | The ingest funnel (slots, evidence, conflicts, resolution) runs on the in-memory/JSON store; the Neo4j store speaks a narrower query/vector interface. The CLI bridges this by *mirroring* finished claims into Neo4j for search, but the funnel's write-path itself is not yet graph-native. | Build a `KnowledgeGraphStore` adapter implementing the engine's full interface (`upsert_entity(name)→Entity`, `add_claim→Claim`, `observe_slot`, `confirm_slot`, `list_canonical_claims`, `get_expected_slots`, ...). Approved-layer work. |
 | **Rate limits** | MiMo gateway has rate limits; rapid repeated requests will hit 429. | Space out ingests or upgrade plan. |
-| **Vector search needs Neo4j** | Claims are now embedded at ingest (local Ollama `bge-m3`, 1024-dim), but the file-backed store has no vector consumer, so `search_claims`/`search_entities` still need the Neo4j vector index. CLI `--query` uses keyword matching. | Wire the Neo4j write-path (above); the vectors are already produced and attached to claims. |
+| **Semantic search = CLI vector mirror** | The CLI embeds each claim (Ollama `bge-m3`, 1024-dim) and mirrors entities + claims into a Neo4j vector index, so `ask --query` is true semantic search. The JSON store stays the source of truth; Neo4j is a secondary index. If Ollama/Neo4j are unavailable — or an existing vector index has a different dimension — the CLI degrades **loudly** to keyword search rather than silently. | A full graph-first engine (funnel state in Neo4j, not just vectors) remains the larger follow-up. |
 | **CLI curation commands** | Slot/claim/case promotion is via API/MCP, not yet the CLI. | Add `confirm-slot` / `promote-claim` / `resolve-case` subcommands on request. |
 
 The CLI path (`scripts/ke.py`) is fully functional today for ingest + query on

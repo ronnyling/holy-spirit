@@ -26,7 +26,12 @@ from knowledge_engine.graph.neo4j_store import GraphCycleError, KnowledgeGraphSt
 from knowledge_engine.models import Claim, EpistemicStatus, Entity
 
 _URI = os.environ.get("KE_NEO4J_URI")
-_DIM = 8
+# The claim vector index is a single shared object on the (community-edition)
+# `neo4j` database, so its dimension must agree with everything else that touches
+# it — notably the CLI, which embeds with bge-m3 (1024). Hardcoding a different
+# dimension here would collide with that index (and, before the dimension guard,
+# silently corrupt it). Track the configured embedding dimension instead.
+_DIM = int(os.environ.get("KE_EMBEDDING_DIMENSIONS", "1024"))
 
 pytestmark = pytest.mark.skipif(
     not _URI, reason="KE_NEO4J_URI not set; Neo4j integration tests skipped"

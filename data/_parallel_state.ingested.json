@@ -1,0 +1,38 @@
+{
+  "ingested": {
+    "67f1c675cd1743b39736943cc06b52cfb0e0c6a8d1ecda57d59c2ac9c010308e": {
+      "claims": 3,
+      "domain": "trading",
+      "domain_source": "folder",
+      "entity_id": "5293d40ba47e4817b1d1815dbc5885e3",
+      "file": "Transcript S1-B \u2014 Value branch.txt",
+      "ingested_at": "2026-07-02T08:47:20.715404+00:00"
+    },
+    "97039fa2cfb598b3f760746cd6eb2e74d1e708e93e5bb21f34f6416edbdb0c97": {
+      "claims": 4,
+      "domain": "trading",
+      "domain_source": "folder",
+      "entity_id": "9ef0a4ae4a964d968179ac5124f0da06",
+      "file": "Transcript S1-A \u2014 Dividend branch.txt",
+      "ingested_at": "2026-07-02T08:47:12.729324+00:00"
+    },
+    "a1620cd673174cedbffbcd04596c3cd39fa8d03d3ce5179bb4e7d048a8b2e0d5": {
+      "claims": 7,
+      "domain": "trading",
+      "domain_source": "folder",
+      "entity_id": "2c5ff23d316342a382c947b3a25ccd38",
+      "file": "Transcript S1-D \u2014 Value branch.txt",
+      "ingested_at": "2026-07-02T08:47:35.509599+00:00"
+    },
+    "e6e92d41d5b3665d02b442298da9e8946281df5e17c1ec9adfd31a0df84f5552": {
+      "claims": 7,
+      "domain": "trading",
+      "domain_source": "folder",
+      "entity_id": "c857bfb8229b458c9d119129a84fa832",
+      "file": "Transcript S1-C \u2014 Income branch.txt",
+      "ingested_at": "2026-07-02T08:47:28.026840+00:00"
+    }
+  },
+  "updated_at": "2026-07-02T08:47:35.835091+00:00",
+  "version": 1
+}

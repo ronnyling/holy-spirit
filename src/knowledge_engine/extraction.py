@@ -20,6 +20,7 @@ import json
 import re
 from typing import Protocol
 
+from .chunking import TranscriptChunker
 from .contracts import ClaimDraft
 
 _SYSTEM_PROMPT = (
@@ -45,25 +46,49 @@ class SupportsComplete(Protocol):
 
 
 class ClaimExtractor:
-    """Turns raw transcript text into validated ClaimDraft objects via the LLM."""
+    """Turns raw transcript text into validated ClaimDraft objects via the LLM.
 
-    def __init__(self, client: SupportsComplete) -> None:
+    Extraction is chunk-aware so it SCALES to long transcripts: the text is split
+    into bounded, sentence-aware windows (deterministic, BOUNDED layer) and each
+    window is sent to the LLM separately. This keeps every model call's input and
+    output small — the real reason a single whole-transcript call intermittently
+    returned empty/truncated content on large inputs. Claims are then aggregated
+    and de-duplicated across the overlapping windows by normalized statement text.
+    """
+
+    def __init__(self, client: SupportsComplete, *, chunker: TranscriptChunker | None = None) -> None:
         self._client = client
+        self._chunker = chunker or TranscriptChunker()
 
     def extract(self, *, domain: str, entity_name: str, transcript_text: str) -> list[ClaimDraft]:
-        """Extract claims. Returns [] on empty text or unparseable model output."""
-        text = transcript_text.strip()
-        if not text:
+        """Extract claims across all chunks. Returns [] only for empty input.
+
+        Per-chunk model output is parsed by the bounded layer; a validly-parsed
+        empty array legitimately means "no claims in this window". Empty/truncated
+        model responses raise upstream (see llm._content_or_raise) rather than
+        silently yielding nothing — no fallbacks.
+        """
+        chunks = self._chunker.chunk(transcript_text)
+        if not chunks:
             return []
 
-        user = (
-            f"Domain: {domain}\n"
-            f"Entity (topic): {entity_name}\n"
-            "Transcript:\n"
-            f"{text}\n"
-        )
-        raw = self._client.complete_sync(system=_SYSTEM_PROMPT, user=user)
-        return self._parse(raw)
+        drafts: list[ClaimDraft] = []
+        seen: set[str] = set()
+        for chunk in chunks:
+            user = (
+                f"Domain: {domain}\n"
+                f"Entity (topic): {entity_name}\n"
+                "Transcript excerpt:\n"
+                f"{chunk.text}\n"
+            )
+            raw = self._client.complete_sync(system=_SYSTEM_PROMPT, user=user)
+            for draft in self._parse(raw):
+                key = draft.statement.strip().lower()
+                if key in seen:
+                    continue
+                seen.add(key)
+                drafts.append(draft)
+        return drafts
 
     @staticmethod
     def _parse(raw: str) -> list[ClaimDraft]:

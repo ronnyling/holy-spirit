@@ -149,6 +149,7 @@ class KnowledgeEngine:
                 )
             for claim, vector in zip(new_claims, vectors):
                 claim.embedding = vector
+                self.store.set_claim_embedding(claim_id=claim.id or "", embedding=vector)
             notes.append(
                 f"embedded {len(new_claims)} claim(s) at "
                 f"{len(vectors[0]) if vectors else 0}-dim (bge-m3)"
@@ -159,6 +160,7 @@ class KnowledgeEngine:
             matches = self.conflict_detector.detect(canonical_claims, claim)
             if matches:
                 claim.epistemic_status = EpistemicStatus.DISPUTED
+                self.store.set_claim_status(claim_id=claim.id or "", status=str(claim.epistemic_status))
                 disputed_claim_ids.append(claim.id or "")
                 for match in matches:
                     case = self.resolution_memory.open_case(match)
@@ -177,9 +179,11 @@ class KnowledgeEngine:
             can_confirm = self._can_confirm_claim(transcript.domain, transcript.source_kind, claim, draft, gap_flags)
             if can_confirm:
                 claim.epistemic_status = EpistemicStatus.CONFIRMED
+                self.store.set_claim_status(claim_id=claim.id or "", status=str(claim.epistemic_status))
                 confirmed_claim_ids.append(claim.id or "")
             else:
                 claim.epistemic_status = EpistemicStatus.UNVERIFIED
+                self.store.set_claim_status(claim_id=claim.id or "", status=str(claim.epistemic_status))
                 unverified_claim_ids.append(claim.id or "")
 
         return TranscriptOutcome(
@@ -219,6 +223,7 @@ class KnowledgeEngine:
             raise ValueError("claim does not meet the evidence gate: " + "; ".join(evaluation.reasons))
         self.evidence_ledger.record_for_claim(claim, evidence, self.store)
         claim.epistemic_status = EpistemicStatus.CONFIRMED
+        self.store.set_claim_status(claim_id=claim.id or "", status=str(claim.epistemic_status))
         return claim
 
     def resolve_case(self, case_id: str, decision: str, rationale: str) -> dict[str, Any]:
@@ -233,14 +238,7 @@ class KnowledgeEngine:
         }
 
     def state_snapshot(self) -> dict[str, Any]:
-        return {
-            "entities": len(self.store.entities),
-            "claims": len(self.store.claims),
-            "confirmed_claims": len([claim for claim in self.store.claims.values() if claim.epistemic_status == EpistemicStatus.CONFIRMED]),
-            "open_cases": len([case for case in self.store.resolution_cases.values() if case.is_open]),
-            "slots": len(self.store.slots),
-            "evidence": len(self.store.evidence),
-        }
+        return self.store.snapshot()
 
     # -- query tools (vector search via Neo4j) ---------------------------------
 
@@ -350,7 +348,7 @@ class KnowledgeEngine:
         )
 
     def _claims_for_entity(self, entity_id: str) -> list[Claim]:
-        return [claim for claim in self.store.claims.values() if claim.entity_id == entity_id]
+        return self.store.list_claims_for_entity(entity_id)
 
     def _can_confirm_claim(
         self,

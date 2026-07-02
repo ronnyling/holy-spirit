@@ -162,6 +162,95 @@ def search_by_domain(domain: str, limit: int = 50) -> dict[str, Any]:
     return engine.search_by_domain(domain, limit=limit)
 
 
+@mcp_server.tool()
+def list_domains() -> dict[str, Any]:
+    """List all knowledge domains that have been ingested into the system.
+
+    Returns a sorted list of domain tags alongside summary counts so consumers
+    can discover what experience the engine has accumulated before querying.
+    """
+    from .graph.neo4j_store import KnowledgeGraphStore
+    from .policy import list_policy_domains
+
+    if isinstance(engine.store, KnowledgeGraphStore):
+        graph_domains = engine.store.list_domains()
+    else:
+        # JSON store — derive from claim tags.
+        graph_domains = sorted({
+            t for c in engine.store.claims.values() for t in c.tags if t
+        })
+
+    policy_domains = list_policy_domains()
+    return {
+        "ingested_domains": graph_domains,
+        "policy_domains": policy_domains,
+        "total": len(graph_domains),
+    }
+
+
+@mcp_server.tool()
+def explore_domain(domain: str, limit: int = 50) -> dict[str, Any]:
+    """Full epistemic state of a domain — the system's accumulated experience.
+
+    Unlike ``search_by_domain`` (which returns only Confirmed claims), this tool
+    returns the complete picture: confirmed knowledge, contested claims, pending
+    evidence, resolution precedents, and the emergent slot schema.  This is the
+    'experience pack' a downstream agent should load before acting as an expert
+    in the given domain.
+    """
+    from .graph.neo4j_store import KnowledgeGraphStore
+    from .models import EpistemicStatus
+
+    if not isinstance(engine.store, KnowledgeGraphStore):
+        return {"error": "explore_domain requires the Neo4j graph store"}
+
+    store = engine.store
+    confirmed = store.search_by_domain(domain=domain, epistemic_status="Confirmed", limit=limit)
+    disputed  = store.search_by_domain(domain=domain, epistemic_status="Disputed",  limit=limit)
+    unverified = store.search_by_domain(domain=domain, epistemic_status="Unverified", limit=limit)
+
+    snap = store.snapshot()
+    return {
+        "domain": domain,
+        "summary": {
+            "confirmed_claims": len(confirmed.get("claims", [])),
+            "unverified_claims": len(unverified.get("claims", [])),
+            "disputed_claims": len(disputed.get("claims", [])),
+            "open_cases": snap.get("open_cases", 0),
+        },
+        "confirmed": confirmed,
+        "unverified": unverified,
+        "disputed": disputed,
+    }
+
+
+@mcp_server.tool()
+def find_cross_domain_patterns(
+    domains: list[str] | None = None,
+    min_similarity: float = 0.7,
+    limit: int = 20,
+) -> dict[str, Any]:
+    """Find semantically similar claims that span different knowledge domains.
+
+    Useful for discovering macro-level connections — e.g. a TCM concept about
+    inflammation that resembles a trading concept about market stress, or a
+    real-estate cash-flow rule that mirrors a dividend-investing principle.
+
+    Returns pairs of claims from disjoint domain sets, ranked by cosine similarity.
+    """
+    from .graph.neo4j_store import KnowledgeGraphStore
+
+    if not isinstance(engine.store, KnowledgeGraphStore):
+        return {"error": "find_cross_domain_patterns requires the Neo4j graph store"}
+
+    patterns = engine.store.find_cross_domain_patterns(
+        domains=domains,
+        min_similarity=min_similarity,
+        limit=limit,
+    )
+    return {"patterns": patterns, "count": len(patterns)}
+
+
 # -- resources -----------------------------------------------------------------
 
 

@@ -1,0 +1,5 @@
+Speaker: Risk Analyst B
+
+The claim that we can sell tomorrow and breakeven is not proven. Property disposal has transaction costs, legal fees, agent fees, possible RPGT/tax, loan costs, holding costs, and auction-specific risks.
+
+Also, asking prices are not completed transaction prices. A 25% discount to asking price may not equal 25% discount to market value.
