@@ -93,8 +93,8 @@ Your `.env` is already created and git-ignored. Key lines:
 
 ```dotenv
 KE_NEO4J_PASSWORD=knowledge-engine
-KE_MIMO_API_BASE_URL=https://token-plan-sgp.xiaomimimo.com/v1
-KE_MIMO_API_KEY=sk-...            # currently returns 401 — see limitations
+KE_MIMO_API_BASE_URL=https://api.xiaomimimo.com/v1
+KE_MIMO_API_KEY=tp-...            # token-plan key — verified working (chat returns 200)
 KE_MIMO_MODEL=mimo-v2.5
 KE_EMBEDDING_PROVIDER=ollama      # local embeddings, no key needed
 KE_EMBEDDING_MODEL=bge-m3
@@ -168,9 +168,10 @@ ways to produce claims:
    claims automatically. Extracted claims carry **no evidence**, so they enter
    as `Unverified` and must earn promotion.
 
-> The MiMo key currently returns **401 Invalid API Key**, so auto-extraction is
-> wired but not usable until a valid key is provided. Until then, use
-> `*.claims.json`.
+> The MiMo chat endpoint is **verified working** (base URL
+> `https://api.xiaomimimo.com/v1`, model `mimo-v2.5`, `tp-` token-plan key —
+> chat returns 200), so auto-extraction is usable. `*.claims.json` remains the
+> deterministic alternative when you want to author claims by hand.
 
 ---
 
