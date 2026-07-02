@@ -51,7 +51,10 @@ must be configured — the engine does not run in a degraded mode.
 
 The fastest way to use the system end-to-end today is the CLI. It runs the full
 ingest pipeline on a local file-backed store and lets you query without
-embeddings. Full walkthrough: [docs/UAT-Usage-Guide.md](docs/UAT-Usage-Guide.md).
+embeddings. **New here?** Follow the from-scratch setup (install Python, install
+Ollama + pull `bge-m3`, configure `.env`, first ingest) in
+[docs/UAT-Usage-Guide.md §0](docs/UAT-Usage-Guide.md#0-from-scratch-first-time-setup).
+Full walkthrough: [docs/UAT-Usage-Guide.md](docs/UAT-Usage-Guide.md).
 
 ```powershell
 # 1. Put transcripts in a folder (one .txt per transcript; see the guide for
@@ -142,7 +145,7 @@ These are the core entities. They map directly onto graph nodes; lineage and con
 When a transcript is ingested it is first *harboured* — this happens before any claim processing and is fully deterministic and offline (no LLM, no fallbacks):
 
 1. **Normalize** line endings and collapse blank runs.
-2. **Hash** the normalized content (SHA-256). Identical content is never harboured twice — re-ingesting the same transcript is idempotent housekeeping, not a duplicate.
+2. **Hash** the normalized content (SHA-256). Identical content is never harboured twice — re-ingesting the same transcript is idempotent housekeeping, not a duplicate, and it short-circuits the whole pipeline (no re-chunk, re-extract, or re-embed).
 3. **Chunk** with a structure-aware windower (`TranscriptChunker`): paragraph/sentence aware, bounded size with overlap, oversized sentences hard-split. Offsets are recorded against normalized text.
 4. **Document** each transcript as human-readable markdown (metadata + chunk map) under `documents/`.
 5. **Register** the raw text, the generated document, and metadata in a filesystem-backed manifest.
@@ -248,16 +251,17 @@ the sum of evidence credibility (0-1 each). Source kind still governs trust and 
 ## Processing Pipeline
 
 1. Ingest transcript.
-2. Harbour it: normalize, hash, chunk, auto-document, register (idempotent housekeeping).
+2. Harbour it: normalize, hash, chunk, auto-document, register (idempotent housekeeping). Identical content under any file name **short-circuits the rest of the pipeline** — no re-extraction, no re-embedding.
 3. Extract claims.
 4. Observe slots and learn frequencies.
 5. Run structural and semantic gap checks (gap check runs **before** conflict check).
 6. If gaps exist, flag them immediately.
 7. Run conflict detection against canonical knowledge.
 8. Open or reuse a resolution case if needed.
-9. Research with the user to gather evidence.
-10. Promote to canonical only when evidence gates are satisfied.
-11. Keep the evidence chain and resolution history.
+9. Embed new claims (on-demand model, warmed then released; batched and `num_ctx`-bounded).
+10. Research with the user to gather evidence.
+11. Promote to canonical only when evidence gates are satisfied.
+12. Keep the evidence chain and resolution history.
 
 ## Domain Behavior
 
@@ -294,7 +298,8 @@ but not yet built.
 **Implemented and locally verified:**
 
 - Entity, claim, evidence, slot, and resolution-case models (layers 1-3, 5, 6 of the build order)
-- Transcript harbouring: deterministic chunking (`chunking.py`), auto-documentation (`documentation.py`), and idempotent housekeeping registry (`registry.py`), wired into `ingest_transcript`
+- Transcript harbouring: deterministic chunking (`chunking.py`), auto-documentation (`documentation.py`), and idempotent housekeeping registry (`registry.py`), wired into `ingest_transcript`. Duplicate content (same normalized text under any file name) **short-circuits the whole pipeline** — chunking, extraction, and embedding are all skipped.
+- Claim embedding on ingest: when an embedding provider is configured, new claims are embedded (1024-dim) inside an on-demand warmed session that releases the model afterwards; duplicate transcripts never re-embed.
 - Orchestration of the full pipeline in `engine.py`
 - Slot observation and threshold-based promotion suggestions, with human-gated confirmation
 - Structural gap detection that runs before conflict detection
@@ -303,7 +308,7 @@ but not yet built.
 - Per-domain evidence gates and evidence scoring
 - Graph schema (`graph/schema.py`): Cypher constraints + native vector index DDL + cycle-probe query (unit-tested)
 - `graph/neo4j_store.py`: real Neo4j-driver store — node/edge upserts, native vector search (eventually-consistent, with `await_indexes`), and Cypher-native cycle detection. **Verified against Neo4j Community 2026.05.0** — full suite `python -m pytest -q` reports **43 passed** (unit + extraction + persistence tests; Neo4j integration tests run when a database is reachable, otherwise skipped). See [wiki/Setup-Neo4j.md](wiki/Setup-Neo4j.md).
-- `embeddings.py`: OpenAI-compatible embedding client using async httpx + tenacity retry (exponential backoff on 429/503). Optional at server startup — when embedding env vars are absent, vector search tools return a clear error; all other tools still work.
+- `embeddings.py`: embedding transport with two backends — local **Ollama-native** (`/api/embed`, default `bge-m3`, 1024-dim) and OpenAI-compatible (`/v1/embeddings`) — on async httpx + tenacity retry (exponential backoff on 429/503). Embedding is treated as **housekeeping**: the model is loaded on demand for a batch (`warm()`, `keep_alive=5m`) and released immediately afterwards (`unload_sync()`, `keep_alive=0`), so an idle engine holds no model in memory. Input is **batched** (`batch_size`, default 64) and **context-bounded** (`num_ctx`, default 1024) per request. Optional at server startup — when embedding env vars are absent, vector search tools return a clear error; all other tools still work.
 - `llm.py` + `extraction.py`: MiMo (OpenAI-compatible) chat client and LLM-backed claim extraction. When a valid `KE_MIMO_API_KEY` is set and a transcript arrives with no hand-authored claims, claims are extracted from the raw text. Extraction is the **unbounded** layer; parsing/validation is deterministic and **never fabricates evidence**, so extracted claims enter as `Unverified`. Optional and non-breaking (unit-tested with a stubbed client).
 - `scripts/ke.py`: command-line interface for ingest + query on the file-backed store — the recommended UAT surface. See [docs/UAT-Usage-Guide.md](docs/UAT-Usage-Guide.md).
 - `store.py` JSON persistence (`save`/`load`) so an ingested corpus survives across CLI runs.
@@ -313,7 +318,7 @@ but not yet built.
 **Still to build (no fallbacks — these block full production):**
 
 - **Neo4j write-path adapter (top priority).** The engine's ingest pipeline currently targets the in-memory `KnowledgeStore`. The `KnowledgeGraphStore` implements only the query/vector side with a different interface, so the MCP server's *ingestion* tools do not yet persist to Neo4j. The engine needs `KnowledgeGraphStore` to implement the same interface it expects (`upsert_entity(name)→Entity`, `add_claim→Claim`, `observe_slot`, `get_slot`, `confirm_slot`, `list_canonical_claims`, `get_expected_slots`, resolution-case methods, and dict-like accessors).
-- A **valid MiMo API key** — extraction is wired but the current key returns 401; and **an embeddings provider** — the MiMo gateway exposes no `/embeddings` endpoint, so semantic vector search stays off until one is configured.
+- A **valid MiMo API key** — extraction is wired but the current key returns 401. (Embeddings now run locally on Ollama `bge-m3`, so semantic vector search no longer depends on a remote embeddings endpoint; it only needs the Neo4j vector index write-path below.)
 - LLM-backed semantic gap detection, claim reconciliation, and conflict interpretation (MiMo 2.5)
 - Versioned markdown canonical store
 - Cold-start-scale thresholds and drift / alert-fatigue safeguards tuned for real volume
@@ -347,7 +352,7 @@ It also exposes a `knowledge://state` resource with a JSON snapshot of the curre
 
 - `src/knowledge_engine/` - runtime package (engine, models, chunking, documentation, registry, gaps, conflicts, evidence, resolution, policy, embeddings)
 - `src/knowledge_engine/graph/` - Neo4j graph layer (`schema.py` pure DDL, `neo4j_store.py` driver store with vector search)
-- `src/knowledge_engine/embeddings.py` - OpenAI-compatible embedding client (async httpx + tenacity retry)
+- `src/knowledge_engine/embeddings.py` - embedding client: Ollama-native (`/api/embed`) + OpenAI-compatible transport, on-demand model lifecycle (`warm()`/`unload_sync()`), batching + `num_ctx` (async httpx + tenacity retry)
 - `src/knowledge_engine/llm.py` - MiMo (OpenAI-compatible) chat client (async httpx + tenacity retry)
 - `src/knowledge_engine/extraction.py` - LLM-backed claim extraction (unbounded LLM + deterministic parsing)
 - `src/knowledge_engine/bootstrap.py` - shared engine bootstrap + `.env` loader (used by server and CLI)

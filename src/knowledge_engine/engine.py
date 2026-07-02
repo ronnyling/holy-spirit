@@ -57,6 +57,25 @@ class KnowledgeEngine:
 
         entity = self.store.upsert_entity(canonical_name=transcript.entity_name)
 
+        # Housekeeping: if the registry recognised this exact content (SHA-256 of
+        # the normalized text) it was already harboured — regardless of file name
+        # or source_id. Skip re-chunking, re-extraction, and re-embedding entirely.
+        if harbour is not None and not harbour.created:
+            return TranscriptOutcome(
+                entity_id=entity.id or "",
+                transcript_id=harbour.record.transcript_id,
+                transcript_created=False,
+                chunk_count=harbour.record.chunk_count,
+                canonical_claim_ids=[
+                    claim.id or ""
+                    for claim in self.store.list_canonical_claims(entity.id or "")
+                ],
+                notes=[
+                    f"duplicate content already ingested as {harbour.record.transcript_id}; "
+                    "skipped re-processing (chunking + extraction + embedding)"
+                ],
+            )
+
         # LLM auto-extraction: only when the caller supplied no claim_drafts and
         # an extractor is wired. Hand-authored drafts always take precedence.
         claim_drafts = transcript.claim_drafts
@@ -118,6 +137,22 @@ class KnowledgeEngine:
                 self.store.get_expected_slots(entity.id or ""),
             )
         )
+
+        # Embed new claim statements so they are vector-searchable. The model is
+        # loaded once for the batch (warm) and released the moment ingestion is
+        # done (housekeeping). Claims are short, so one batched call suffices; long
+        # lists are split by embed_texts.
+        if self.embedding_client is not None and new_claims:
+            with self.embedding_client.warm():
+                vectors = self.embedding_client.embed_texts(
+                    [claim.statement for claim in new_claims]
+                )
+            for claim, vector in zip(new_claims, vectors):
+                claim.embedding = vector
+            notes.append(
+                f"embedded {len(new_claims)} claim(s) at "
+                f"{len(vectors[0]) if vectors else 0}-dim (bge-m3)"
+            )
 
         canonical_claims = self.store.list_canonical_claims(entity.id or "")
         for claim, draft in zip(new_claims, claim_drafts):
