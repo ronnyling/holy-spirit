@@ -16,12 +16,14 @@ agent can then use that knowledge as working experience for later R&D tasks.
 - **Graph-first on Neo4j 5** — one engine for the property graph *and* native vector search; no split-brain, no runtime fallbacks.
 - **Bounded vs unbounded discipline** — deterministic work stays in code; only genuinely semantic work goes to the LLM.
 - **User is a source, not an oracle** — user input enters as `Unverified` and must earn confirmation.
+- **Slot promotion queue** — threshold crossings during ingest write to a persistent queue; the user reviews and confirms at their own pace, never blocking ingestion.
+- **Experience synthesis** — `explore_experience` combines LLM world knowledge with system-accumulated claims to produce a grounded, opinionated view: world baseline → experience adds/corrects → discerned position.
 
 ## Contents
 
 - [Quick Start](#quick-start)
 - [Status: implemented vs planned](#current-implementation-vs-planned)
-- [Usage scenarios](wiki/Usage-Scenarios.md)
+- [Usage guide](wiki/Usage-Guide.md) — setup, CLI walkthrough, Streamlit UI, and curation
 - [Wiki](#wiki) — full architecture, data model, pipeline, and setup docs
 - Deep design: [Architecture](wiki/Architecture.md) · [Data Model](wiki/Data-Model.md) · [Pipeline](wiki/Pipeline.md) · [Domain Policies](wiki/Domain-Policies.md)
 
@@ -60,10 +62,10 @@ cd knowledge_engine
 streamlit run app.py
 ```
 
-The app opens at `http://localhost:8501` with three tabs:
+The app opens at `http://localhost:8503` with three tabs:
 - **Ingest** — paste a transcript or upload a batch of `.txt` files; the form clears after success and a session history table tracks everything ingested this run.
-- **Chat** — RAG chat grounded in the evidence-gated knowledge base; the LLM answers within the retrieved claims and shows the source evidence open by default.
-- **Knowledge Base** — live snapshot, open-conflict resolution panel (enter decision + rationale to close a case), domain browser, entity lookup, and cross-domain pattern finder.
+- **Chat** — two modes selectable via radio: **Research Chat** (RAG grounded in evidence-gated claims, source evidence shown open by default) and **Explore Experience** (world knowledge from the LLM discerned through system experience — `[WORLD VIEW]` → `[EXPERIENCE]` → `[DISCERNED POSITION]`).
+- **Knowledge Base** — live snapshot, **pending slot promotions** queue (review and confirm lifecycle advances), open-conflict resolution panel (enter decision + rationale to close a case), domain browser (full epistemic view: Confirmed + Unverified + Disputed), entity lookup, and cross-domain pattern finder.
 
 ### Try it now (CLI / UAT)
 
@@ -88,9 +90,7 @@ python scripts/ke.py snapshot
 ```
 
 > **Storage:** when `KE_NEO4J_URI` is set and Neo4j is reachable the CLI uses it as the
-> **primary store** — all ingest writes go directly to the graph. When Neo4j is absent
-> it falls back to the file-backed JSON store (`data/uat_state.json`) with a loud stderr
-> warning. See [docs/UAT-Usage-Guide.md](docs/UAT-Usage-Guide.md) for the full setup.
+> **primary store**. See [wiki/Usage-Guide.md](wiki/Usage-Guide.md) for the full setup.
 
 
 ## Product goals
