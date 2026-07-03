@@ -788,6 +788,49 @@ class KnowledgeGraphStore:
         self.upsert_slot(slot)
         return slot
 
+    def queue_slot_promotion(
+        self,
+        entity_id: str,
+        entity_name: str,
+        slot_name: str,
+        current_lifecycle: str,
+        suggested_lifecycle: str,
+        observed_count: int,
+        reason: str,
+    ) -> None:
+        """Persist a slot promotion suggestion as a SlotPromotion node."""
+        key = f"{entity_id}:{slot_name.strip().lower()}"
+        self._run(
+            "MERGE (sp:SlotPromotion {queue_key: $key}) "
+            "SET sp.entity_id = $entity_id, sp.entity_name = $entity_name, "
+            "    sp.slot_name = $slot_name, "
+            "    sp.current_lifecycle = $current_lifecycle, "
+            "    sp.suggested_lifecycle = $suggested_lifecycle, "
+            "    sp.observed_count = $observed_count, sp.reason = $reason, "
+            "    sp.status = 'pending'",
+            key=key,
+            entity_id=entity_id,
+            entity_name=entity_name,
+            slot_name=slot_name,
+            current_lifecycle=current_lifecycle,
+            suggested_lifecycle=suggested_lifecycle,
+            observed_count=observed_count,
+            reason=reason,
+        )
+
+    def list_pending_slot_promotions(self) -> list[dict]:
+        """Return all pending SlotPromotion candidates ordered by observation count."""
+        rows = self._run(
+            "MATCH (sp:SlotPromotion) WHERE sp.status = 'pending' "
+            "RETURN sp.entity_id AS entity_id, sp.entity_name AS entity_name, "
+            "       sp.slot_name AS slot_name, "
+            "       sp.current_lifecycle AS current_lifecycle, "
+            "       sp.suggested_lifecycle AS suggested_lifecycle, "
+            "       sp.observed_count AS observed_count, sp.reason AS reason "
+            "ORDER BY sp.observed_count DESC"
+        )
+        return [dict(r) for r in rows]
+
     def confirm_slot(self, entity_id: str, slot_name: str, target: SlotLifecycle, confirmed_by: str) -> Slot:
         if not confirmed_by.strip():
             raise ValueError("human confirmation is required to promote a slot")
@@ -809,6 +852,12 @@ class KnowledgeGraphStore:
         else:
             slot.lifecycle = target
         self.upsert_slot(slot)
+        # Clear from promotion queue once confirmed.
+        key = f"{entity_id}:{slot_name.strip().lower()}"
+        self._run(
+            "MATCH (sp:SlotPromotion {queue_key: $key}) SET sp.status = 'confirmed'",
+            key=key,
+        )
         return slot
 
     def get_slot(self, entity_id: str, slot_name: str) -> Slot | None:
@@ -918,6 +967,19 @@ class KnowledgeGraphStore:
                 best = _row_to_resolution_case(dict(row))
                 best_score = score
         return best
+
+    def list_open_resolution_cases(self) -> list[ResolutionCase]:
+        """Return all ResolutionCases where is_open = true."""
+        rows = self._run(
+            "MATCH (rc:ResolutionCase) WHERE rc.is_open = true "
+            "RETURN rc.id AS id, rc.conflict_signature AS conflict_signature, "
+            "       rc.research_notes AS research_notes, rc.decision AS decision, "
+            "       rc.rationale AS rationale, rc.version AS version, "
+            "       rc.is_open AS is_open, rc.reopened_from_case_id AS reopened_from_case_id, "
+            "       rc.conflicting_claim_ids AS conflicting_claim_ids "
+            "ORDER BY rc.version DESC"
+        )
+        return [_row_to_resolution_case(dict(r)) for r in rows]
 
     # -- KnowledgeStore interface — state snapshot -----------------------------
 

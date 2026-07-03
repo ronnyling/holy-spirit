@@ -17,6 +17,9 @@ class KnowledgeStore:
         self.slots: dict[str, Slot] = {}
         self.resolution_cases: dict[str, ResolutionCase] = {}
         self._slot_index: dict[tuple[str, str], str] = {}
+        # Keyed by "{entity_id}:{slot_name_lower}" — persists suggestions across
+        # ingest calls so they accumulate rather than being silently dropped.
+        self.pending_promotions: dict[str, dict] = {}
 
     def upsert_entity(
         self,
@@ -106,6 +109,32 @@ class KnowledgeStore:
             if slot.lifecycle == SlotLifecycle.EXPECTED
         ]
 
+    def queue_slot_promotion(
+        self,
+        entity_id: str,
+        entity_name: str,
+        slot_name: str,
+        current_lifecycle: str,
+        suggested_lifecycle: str,
+        observed_count: int,
+        reason: str,
+    ) -> None:
+        """Persist a slot promotion suggestion so it survives across calls."""
+        key = f"{entity_id}:{slot_name.strip().lower()}"
+        self.pending_promotions[key] = {
+            "entity_id": entity_id,
+            "entity_name": entity_name,
+            "slot_name": slot_name,
+            "current_lifecycle": current_lifecycle,
+            "suggested_lifecycle": suggested_lifecycle,
+            "observed_count": observed_count,
+            "reason": reason,
+        }
+
+    def list_pending_slot_promotions(self) -> list[dict]:
+        """Return all pending slot promotion candidates."""
+        return list(self.pending_promotions.values())
+
     def confirm_slot(self, entity_id: str, slot_name: str, target: SlotLifecycle, confirmed_by: str) -> Slot:
         if not confirmed_by.strip():
             raise ValueError("human confirmation is required to promote a slot")
@@ -119,21 +148,20 @@ class KnowledgeStore:
                 raise ValueError("slot needs at least 3 observations before candidate promotion")
             slot.lifecycle = SlotLifecycle.CANDIDATE
             slot.candidate_count += 1
-            return slot
-
-        if target == SlotLifecycle.EXPECTED:
+        elif target == SlotLifecycle.EXPECTED:
             if slot.observed_count < 5:
                 raise ValueError("slot needs at least 5 observations before expected promotion")
             slot.lifecycle = SlotLifecycle.EXPECTED
             slot.expected_count += 1
-            return slot
-
-        if target == SlotLifecycle.RETIRED:
+        elif target == SlotLifecycle.RETIRED:
             slot.lifecycle = SlotLifecycle.RETIRED
             slot.retired_at = datetime.now(timezone.utc)
-            return slot
+        else:
+            slot.lifecycle = target
 
-        slot.lifecycle = target
+        # Clear from the promotion queue once the user has acted.
+        key = f"{entity_id}:{slot_name.strip().lower()}"
+        self.pending_promotions.pop(key, None)
         return slot
 
     def add_resolution_case(self, case: ResolutionCase) -> ResolutionCase:
@@ -144,6 +172,9 @@ class KnowledgeStore:
 
     def get_resolution_case(self, case_id: str) -> ResolutionCase:
         return self.resolution_cases[case_id]
+
+    def list_open_resolution_cases(self) -> list[ResolutionCase]:
+        return [c for c in self.resolution_cases.values() if c.is_open]
 
     def find_similar_case(self, conflict_signature: str, threshold: float = 0.8) -> ResolutionCase | None:
         best_case: ResolutionCase | None = None

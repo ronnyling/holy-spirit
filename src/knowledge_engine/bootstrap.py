@@ -92,5 +92,6 @@ def build_engine_from_env(*, dotenv_path: str | os.PathLike[str] = ".env") -> Kn
         )
 
     return KnowledgeEngine(
-        store=store, embedding_client=embedding_client, extractor=extractor
+        store=store, embedding_client=embedding_client, extractor=extractor,
+        llm_client=mimo_client,
     )

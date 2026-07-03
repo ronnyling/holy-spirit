@@ -47,6 +47,24 @@ python server.py                     # MCP server (for VS Code Copilot)
 Copy `.env.example` to `.env` and fill in the Neo4j, embedding, and LLM settings. Required backends
 must be configured — the engine does not run in a degraded mode.
 
+### Try it now (local UI)
+
+The fastest way to use the system interactively is the Streamlit app:
+
+```powershell
+# Install the UI extra (Streamlit):
+pip install ".[ui]"
+
+# Start Neo4j + Ollama bge-m3 first, then:
+cd knowledge_engine
+streamlit run app.py
+```
+
+The app opens at `http://localhost:8501` with three tabs:
+- **Ingest** — paste a transcript or upload a batch of `.txt` files; the form clears after success and a session history table tracks everything ingested this run.
+- **Chat** — RAG chat grounded in the evidence-gated knowledge base; the LLM answers within the retrieved claims and shows the source evidence open by default.
+- **Knowledge Base** — live snapshot, open-conflict resolution panel (enter decision + rationale to close a case), domain browser, entity lookup, and cross-domain pattern finder.
+
 ### Try it now (CLI / UAT)
 
 The fastest way to use the system end-to-end today is the CLI. It runs the full
@@ -318,6 +336,8 @@ but not yet built.
 - Dynamic domain policy registry (`policy.py`): new domains discovered at ingest time are registered automatically with sensible defaults; `list_policy_domains()` enumerates all known domains (static + dynamic).
 - `evidence_hunter.py`: automated evidence sourcing for `Unverified` claims — generates a neutral search query, executes web search (Tavily), extracts evidence via LLM, evaluates against the per-domain bar, and auto-promotes if the gate is satisfied. Domain credibility ceilings: real estate 0.7, TCM 0.4, trading 0.3. Requires `pip install tavily-python` + `KE_TAVILY_API_KEY`.
 - MCP server with 13 tools (FastMCP, stdio transport) for VS Code Copilot integration.
+- `app.py` Streamlit local UI — three-tab interactive interface: **Ingest** (paste text or multi-file `.txt` upload with batch progress, session history table, auto-clearing form), **Chat** (RAG chat grounded in retrieved knowledge-base claims; sources expander open by default; domain filter built from actual ingested tags; retrieved-claim count shown before the LLM answer), **Knowledge Base** (live counts, open-conflict resolution panel, domain browser, entity lookup, cross-domain pattern finder). Requires `pip install ".[ui]"` and Neo4j + MiMo to be running. Domains are normalised to their canonical policy name on ingest so the domain filter and claim tags stay consistent.
+- `engine.list_open_cases()` — returns all open `ResolutionCase` objects enriched with the full statement text of each conflicting claim, ready to display in a UI or pipe to an agent.
 
 **Still to build (no fallbacks — these block full production):**
 
@@ -361,7 +381,8 @@ It also exposes a `knowledge://state` resource with a JSON snapshot of the curre
 
 - `src/knowledge_engine/` - runtime package (engine, models, chunking, documentation, registry, gaps, conflicts, evidence, resolution, policy, classification, embeddings)
 - `src/knowledge_engine/evidence_hunter.py` - automated web-evidence sourcing for Unverified claims (pluggable `SearchProvider`, Tavily default, domain credibility ceilings)
-- `src/knowledge_engine/graph/` - Neo4j graph layer (`schema.py` pure DDL, `neo4j_store.py` full read/write driver store with vector search, domain listing, and cross-domain patterns)
+- `src/knowledge_engine/graph/` - Neo4j graph layer (`schema.py` pure DDL, `neo4j_store.py` full read/write driver store with vector search, domain listing, cross-domain patterns, and open-case listing)
+- `app.py` - Streamlit local UI (ingest with paste/upload modes + session history, RAG chat, KB browser + conflict resolution panel); install with `pip install ".[ui]"`
 - `src/knowledge_engine/embeddings.py` - embedding client: Ollama-native (`/api/embed`) + OpenAI-compatible transport, on-demand model lifecycle (`warm()`/`unload_sync()`), batching + `num_ctx` (async httpx + tenacity retry)
 - `src/knowledge_engine/llm.py` - MiMo (OpenAI-compatible) chat client (async httpx + tenacity retry)
 - `src/knowledge_engine/extraction.py` - LLM-backed claim extraction (unbounded LLM + deterministic parsing)

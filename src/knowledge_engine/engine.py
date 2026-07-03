@@ -7,7 +7,7 @@ from .conflicts import ConflictDetector, ConflictMatch
 from .contracts import ClaimDraft, ConflictSummary, EvidenceDraft, GapFlag, SlotSuggestion, TranscriptInput, TranscriptOutcome
 from .embeddings import EmbeddingClient
 from .evidence import EvidenceLedger
-from .extraction import ClaimExtractor
+from .extraction import ClaimExtractor, SupportsComplete
 from .gaps import GapDetector
 from .graph.neo4j_store import KnowledgeGraphStore
 from .learning import SlotLearner
@@ -18,6 +18,28 @@ from .resolution import ResolutionMemory
 from .store import KnowledgeStore
 
 
+_EXPLORE_EXPERIENCE_SYSTEM = """\
+You are a domain expert who synthesizes two sources of knowledge:
+1. General world knowledge — what is commonly understood about a topic
+2. Accumulated experience — what this knowledge system has specifically learned from expert sources
+
+Structure your response in three clear parts:
+[WORLD VIEW] The conventional or commonly-accepted understanding. Be concise.
+[EXPERIENCE] What accumulated experience adds, corrects, or confirms. Reference each point by its
+epistemic status: Confirmed (evidence-backed), Unverified (observed but not yet proven),
+or Disputed (experts disagree).
+[DISCERNED POSITION] The practical, actionable synthesis. Where experience departs from world
+knowledge, lead with experience. Preserve genuine disagreements — state both sides honestly.
+
+Critical rules:
+- Only use experience claims explicitly provided. Do not invent experience.
+- Frame Unverified claims as \"emerging evidence suggests...\" not established fact.
+- For Disputed claims, state both positions (\"some sources say X, others say Y\").
+- If no experience is available for a point, do not expand the world knowledge section.
+- Be direct and practical — like a consultant who has both studied the field and lived in it.
+"""
+
+
 class KnowledgeEngine:
     def __init__(
         self,
@@ -26,6 +48,7 @@ class KnowledgeEngine:
         store: KnowledgeStore | KnowledgeGraphStore | None = None,
         embedding_client: EmbeddingClient | None = None,
         extractor: ClaimExtractor | None = None,
+        llm_client: SupportsComplete | None = None,
     ) -> None:
         self.store = store or KnowledgeStore()
         self.embedding_client = embedding_client
@@ -34,6 +57,10 @@ class KnowledgeEngine:
         # the raw text. Extracted claims carry NO evidence, so they enter as
         # UNVERIFIED and must earn promotion through the normal evidence gate.
         self.extractor = extractor
+        # LLM client for explore_experience() — can be the same MiMo client
+        # used by the extractor, passed in explicitly so the engine stays
+        # independent of how the client is constructed.
+        self.llm_client = llm_client
         self.slot_learner = SlotLearner()
         self.gap_detector = GapDetector()
         self.conflict_detector = ConflictDetector()
@@ -121,6 +148,20 @@ class KnowledgeEngine:
                             reason=observation.reason or "slot crossed a learned threshold",
                         )
                     )
+                    # Persist to the promotion queue so suggestions survive
+                    # across calls and accumulate for review.
+                    try:
+                        self.store.queue_slot_promotion(
+                            entity_id=entity.id or "",
+                            entity_name=entity.canonical_name,
+                            slot_name=observation.slot.name,
+                            current_lifecycle=observation.slot.lifecycle.value,
+                            suggested_lifecycle=observation.suggested_lifecycle.value,
+                            observed_count=observation.slot.observed_count,
+                            reason=observation.reason or "slot crossed a learned threshold",
+                        )
+                    except Exception:
+                        pass  # queue persistence is best-effort; outcome still returned
 
             gap_flags.extend(self.gap_detector.semantic_gaps(entity.id or "", transcript, draft))
             if draft.evidence:
@@ -237,8 +278,119 @@ class KnowledgeEngine:
             "reopened_from_case_id": case.reopened_from_case_id,
         }
 
+    def list_open_cases(self) -> list[dict[str, Any]]:
+        """Return open resolution cases enriched with conflicting claim statements."""
+        try:
+            cases = self.store.list_open_resolution_cases()
+        except Exception:
+            return []
+        result = []
+        for case in cases:
+            claims_detail = []
+            for cid in case.conflicting_claim_ids:
+                try:
+                    row = self.get_claim(cid)
+                    stmt = row.get("claim", {}).get("statement", cid) if not row.get("error") else cid
+                    status = row.get("claim", {}).get("epistemic_status", "?") if not row.get("error") else "?"
+                except Exception:
+                    stmt, status = cid, "?"
+                claims_detail.append({"id": cid, "statement": stmt, "epistemic_status": status})
+            result.append({
+                "case_id": case.id,
+                "conflict_signature": case.conflict_signature,
+                "research_notes": case.research_notes,
+                "version": case.version,
+                "claims": claims_detail,
+            })
+        return result
+
     def state_snapshot(self) -> dict[str, Any]:
         return self.store.snapshot()
+
+    def list_pending_promotions(self) -> list[dict]:
+        """Return all pending slot promotion candidates from the queue."""
+        try:
+            return self.store.list_pending_slot_promotions()
+        except Exception:
+            return []
+
+    def explore_experience(self, query: str, domain: str | None = None) -> dict[str, Any]:
+        """Synthesize world knowledge discerned through accumulated system experience.
+
+        Step 1: Ask the LLM what the world generally knows (parametric knowledge).
+        Step 2: Retrieve the system's experience claims (all epistemic statuses).
+        Step 3: Ask the LLM to discern — where experience agrees, adds, or corrects
+                the world view. The synthesis is strictly grounded in the provided
+                claims; the LLM must not invent experience.
+        """
+        if self.llm_client is None:
+            return {"error": "explore_experience requires an LLM client (KE_MIMO_API_KEY)"}
+
+        # Step 1: world knowledge via LLM parametric knowledge.
+        world_knowledge = self.llm_client.complete_sync(
+            system=(
+                "You are a knowledgeable expert. Answer the question based on general world "
+                "knowledge. Be concise and factual. Acknowledge uncertainty where appropriate."
+            ),
+            user=query,
+        )
+
+        # Step 2: system experience via vector search (all epistemic statuses).
+        experience_claims: list[dict] = []
+        if self._require_graph_store("explore_experience") and self._require_embeddings("explore_experience"):
+            try:
+                embedding = self.embedding_client.embed_sync(query)  # type: ignore[union-attr]
+                experience_claims = self.store.vector_search_claims(
+                    embedding=embedding,
+                    domain=domain,
+                    k=15,
+                )
+            except Exception:
+                pass
+
+        confirmed_count = sum(1 for h in experience_claims if h.get("epistemic_status") == "Confirmed")
+        unverified_count = sum(1 for h in experience_claims if h.get("epistemic_status") == "Unverified")
+        disputed_count = sum(1 for h in experience_claims if h.get("epistemic_status") == "Disputed")
+
+        if not experience_claims:
+            return {
+                "query": query,
+                "domain": domain,
+                "world_knowledge": world_knowledge,
+                "experience_claims": [],
+                "synthesis": world_knowledge,
+                "confirmed_count": 0,
+                "unverified_count": 0,
+                "disputed_count": 0,
+                "experience_available": False,
+                "note": "No system experience found yet \u2014 returning world knowledge only.",
+            }
+
+        claims_block = "\n".join(
+            f"[{h.get('epistemic_status', 'Unknown')}] {h.get('statement', '')}"
+            for h in experience_claims
+        )
+
+        synthesis = self.llm_client.complete_sync(
+            system=_EXPLORE_EXPERIENCE_SYSTEM,
+            user=(
+                f"Question: {query}\n\n"
+                f"World knowledge:\n{world_knowledge}\n\n"
+                f"Accumulated experience ({len(experience_claims)} claims):\n{claims_block}"
+            ),
+        )
+
+        return {
+            "query": query,
+            "domain": domain,
+            "world_knowledge": world_knowledge,
+            "experience_claims": experience_claims,
+            "synthesis": synthesis,
+            "confirmed_count": confirmed_count,
+            "unverified_count": unverified_count,
+            "disputed_count": disputed_count,
+            "experience_available": True,
+        }
 
     # -- query tools (vector search via Neo4j) ---------------------------------
 

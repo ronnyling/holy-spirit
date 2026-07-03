@@ -7,16 +7,18 @@ Run:
     python server.py
 
 Tools:
-  ingest_transcript   — Harbour a transcript and run the full pipeline
-  confirm_slot        — Human-in-the-loop slot promotion
-  promote_claim       — Evidence-gated claim promotion
-  resolve_case        — Record conflict resolution
-  state_snapshot      — JSON snapshot of engine state
-  search_claims       — Vector search over claims
-  search_entities     — Vector search: find entities by semantic similarity
-  get_entity          — Full entity details with claims, slots, evidence
-  get_claim           — Claim details with provenance and evidence chain
-  search_by_domain    — All confirmed knowledge in a domain
+  ingest_transcript       — Harbour a transcript and run the full pipeline
+  confirm_slot            — Human-in-the-loop slot promotion
+  list_pending_promotions — Retrieve the slot promotion queue
+  promote_claim           — Evidence-gated claim promotion
+  resolve_case            — Record conflict resolution
+  state_snapshot          — JSON snapshot of engine state
+  search_claims           — Vector search over claims
+  search_entities         — Vector search: find entities by semantic similarity
+  get_entity              — Full entity details with claims, slots, evidence
+  get_claim               — Claim details with provenance and evidence chain
+  search_by_domain        — All confirmed knowledge in a domain
+  explore_experience      — World knowledge discerned through system experience
 
 Resource:
   knowledge://state   — JSON snapshot of current engine state
@@ -63,12 +65,25 @@ def confirm_slot(
     confirmed_by: str,
     target: SlotLifecycle = SlotLifecycle.EXPECTED,
 ) -> dict[str, Any]:
-    """Human-in-the-loop promotion of a slot lifecycle.
+    """Promote a slot from the pending queue to Candidate or Expected lifecycle.
 
+    Retrieve the queue first with ``list_pending_promotions`` to see what
+    needs review. Confirming removes the item from the queue.
     target: CANDIDATE (3+ observations) or EXPECTED (5+ observations).
-    Requires confirmed_by to identify the human approver.
     """
     return engine.confirm_slot(entity_name, slot_name, confirmed_by, target)
+
+
+@mcp_server.tool()
+def list_pending_promotions() -> dict[str, Any]:
+    """Return all pending slot promotion candidates from the queue.
+
+    The queue accumulates automatically as transcripts are ingested and the
+    slot learner detects threshold crossings. Review items here, then call
+    ``confirm_slot`` to promote or leave them pending.
+    """
+    items = engine.list_pending_promotions()
+    return {"pending": items, "count": len(items)}
 
 
 @mcp_server.tool()
@@ -249,6 +264,25 @@ def find_cross_domain_patterns(
         limit=limit,
     )
     return {"patterns": patterns, "count": len(patterns)}
+
+
+@mcp_server.tool()
+def explore_experience(query: str, domain: str | None = None) -> dict[str, Any]:
+    """Synthesize world knowledge discerned through accumulated system experience.
+
+    Unlike ``search_claims`` (which retrieves matching facts), this tool builds
+    a three-part response:
+      [WORLD VIEW]        What is commonly understood about this topic.
+      [EXPERIENCE]        What the knowledge base adds, corrects, or confirms,
+                          with each point labelled by epistemic status.
+      [DISCERNED POSITION] The practical synthesis \u2014 where experience departs
+                          from world knowledge, experience leads.
+
+    The LLM is strictly constrained to the provided experience claims; it cannot
+    invent knowledge not present in the graph. When the system is cold (no
+    experience yet), the world view is returned as-is with a note.
+    """
+    return engine.explore_experience(query, domain=domain)
 
 
 # -- resources -----------------------------------------------------------------

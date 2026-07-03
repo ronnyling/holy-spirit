@@ -94,3 +94,19 @@ class TranscriptOutcome(BaseModel):
     open_case_ids: list[str] = Field(default_factory=list)
     canonical_claim_ids: list[str] = Field(default_factory=list)
     notes: list[str] = Field(default_factory=list)
+
+
+class ExperienceResponse(BaseModel):
+    """Result of explore_experience(): world knowledge discerned through system experience."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    query: str
+    domain: str | None = None
+    world_knowledge: str
+    experience_claims: list[dict] = Field(default_factory=list)
+    synthesis: str
+    confirmed_count: int = 0
+    unverified_count: int = 0
+    disputed_count: int = 0
+    experience_available: bool = True
