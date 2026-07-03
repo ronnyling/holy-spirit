@@ -71,6 +71,29 @@ class KnowledgeEngine:
         self.registry = registry
 
     def ingest_transcript(self, transcript: TranscriptInput) -> TranscriptOutcome:
+        # Auto-classify domain and entity_name when the caller left them blank.
+        if not transcript.domain or not transcript.entity_name:
+            effective_domain = transcript.domain
+            effective_entity_name = transcript.entity_name
+            if self.llm_client is not None:
+                from .classification import DomainClassifier
+                classifier = DomainClassifier(self.llm_client)
+                if not effective_domain:
+                    effective_domain = (
+                        classifier.classify(transcript_text=transcript.transcript_text)
+                        or classifier.classify_open(transcript_text=transcript.transcript_text)
+                        or "unknown"
+                    )
+                if not effective_entity_name:
+                    effective_entity_name = (
+                        classifier.classify_entity_name(transcript_text=transcript.transcript_text)
+                        or "unknown"
+                    )
+            transcript = transcript.model_copy(update={
+                "domain": effective_domain or "unknown",
+                "entity_name": effective_entity_name or "unknown",
+            })
+
         harbour: HarbourResult | None = None
         if self.registry is not None:
             harbour = self.registry.harbour(

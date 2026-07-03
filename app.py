@@ -31,129 +31,8 @@ sys.path.insert(0, str(Path(__file__).parent / "src"))
 from knowledge_engine.bootstrap import build_engine_from_env, load_dotenv
 from knowledge_engine.contracts import TranscriptInput
 from knowledge_engine.llm import MiMoClient
-from knowledge_engine.policy import get_domain_policy, list_policy_domains
 
 
-def _canonical_domain(domain: str) -> str:
-    """Return the canonical policy name for a domain so tag storage is consistent.
-
-    e.g. 'real estate' -> 'real_estate', 'TCM' -> 'tcm'.
-    Falls back to the raw value (lowercased, stripped) for unknown domains.
-    """
-    policy = get_domain_policy(domain)
-    return policy.name if policy.name != "default" else domain.strip().lower()
-
-
-def _meta_widgets(suffix: str) -> tuple[str, str, str, float]:
-    """Render domain / source-kind / credibility widgets; return (entity, domain, kind, cred)."""
-    entity = st.text_input(
-        "Entity / topic name",
-        placeholder="e.g. Cap Rate Rules, Acupuncture Meridians, Momentum Strategy",
-        help="The canonical concept this transcript is about.",
-        key=f"entity_{suffix}",
-    )
-    try:
-        known = sorted(set(list_policy_domains()))
-    except Exception:
-        known = []
-    opts = known + ["\u2014 enter new domain \u2014"]
-    dpick = st.selectbox("Domain", opts, key=f"domain_pick_{suffix}")
-    dnew = ""
-    if dpick == "\u2014 enter new domain \u2014":
-        dnew = st.text_input(
-            "New domain name", placeholder="e.g. nutrition science", key=f"domain_new_{suffix}"
-        )
-    domain_raw = dnew.strip() or (dpick if dpick != "\u2014 enter new domain \u2014" else "")
-    kind = st.selectbox(
-        "Source kind",
-        ["external_doc", "user", "internal_wiki"],
-        key=f"kind_{suffix}",
-        help="external_doc: article or book.  user: your own notes.  internal_wiki: references a confirmed claim.",
-    )
-    cred = st.slider(
-        "Source credibility",
-        0.0,
-        1.0,
-        0.5,
-        step=0.05,
-        key=f"cred_{suffix}",
-        help="0 = unreliable, 1 = definitive. Domain evidence bars still apply.",
-    )
-    return entity, domain_raw, kind, cred
-
-
-def _show_outcome(outcome, entity_name: str, domain: str, eng) -> None:
-    """Render the full outcome detail for a single successful ingest."""
-    st.success(
-        f"Ingested \u2192 entity `{outcome.entity_id}`"
-        + (f" | transcript `{outcome.transcript_id}`" if outcome.transcript_id else "")
-    )
-    m1, m2, m3, m4, m5 = st.columns(5)
-    m1.metric("Claims", len(outcome.claim_ids))
-    m2.metric("Confirmed", len(outcome.confirmed_claim_ids))
-    m3.metric("Unverified", len(outcome.unverified_claim_ids))
-    m4.metric("Gaps", len(outcome.gap_flags))
-    m5.metric("Conflicts", len(outcome.conflict_summaries))
-
-    if outcome.gap_flags:
-        with st.expander(f"\u26a0\ufe0f {len(outcome.gap_flags)} gap(s) \u2014 clarification needed"):
-            for g in outcome.gap_flags:
-                icon = {"high": "\U0001f534", "medium": "\U0001f7e1", "low": "\u26aa"}.get(g.severity, "\u26aa")
-                st.markdown(
-                    f"{icon} **{g.kind}** \u2014 {g.question}"
-                    + (f"\n\n> {g.rationale}" if g.rationale else "")
-                )
-
-    if outcome.conflict_summaries:
-        with st.expander(f"\u26a1 {len(outcome.conflict_summaries)} conflict(s) detected"):
-            for c in outcome.conflict_summaries:
-                # Try to show the actual incoming claim statement, not just the ID.
-                incoming_stmt = c.incoming_claim_id
-                try:
-                    detail = eng.get_claim(c.incoming_claim_id)
-                    if detail and not detail.get("error"):
-                        incoming_stmt = detail.get("claim", {}).get("statement", c.incoming_claim_id)
-                except Exception:
-                    pass
-                st.markdown(
-                    f"**Incoming claim:** {incoming_stmt}  \n"
-                    f"Signature: `{c.conflict_signature}` | "
-                    f"Conflicts with {len(c.existing_claim_ids)} existing claim(s)."
-                )
-
-    if outcome.slot_suggestions:
-        with st.expander(f"\U0001f4a1 {len(outcome.slot_suggestions)} slot suggestion(s)"):
-            for s in outcome.slot_suggestions:
-                st.markdown(
-                    f"- **{s.slot_name}**: `{s.current_lifecycle}` \u2192 "
-                    f"`{s.suggested_lifecycle}` *(seen {s.observed_count}\u00d7)* \u2014 {s.reason}"
-                )
-
-    if outcome.notes:
-        with st.expander("Pipeline notes"):
-            for n in outcome.notes:
-                st.write(f"- {n}")
-
-    if outcome.claim_ids:
-        with st.expander(f"\U0001f4cb View extracted claims ({len(outcome.claim_ids)})"):
-            try:
-                for cid in outcome.claim_ids[:30]:
-                    d = eng.get_claim(cid)
-                    if d and not d.get("error"):
-                        cd = d.get("claim", d)
-                        status = cd.get("epistemic_status", "?")
-                        badge = {"Confirmed": "\U0001f7e2", "Disputed": "\U0001f534"}.get(status, "\U0001f7e1")
-                        st.markdown(f"{badge} `{status}` \u2014 {cd.get('statement', cid)}")
-                if len(outcome.claim_ids) > 30:
-                    st.caption(f"\u2026 and {len(outcome.claim_ids) - 30} more.")
-            except Exception:
-                st.caption("(claim detail unavailable \u2014 check Neo4j connection)")
-
-        st.info(
-            f"\U0001f4ac Ready to ask questions? Switch to the **Chat** tab "
-            f"and search within domain `{domain}` to explore what was just ingested.",
-            icon="\U0001f449",
-        )
 
 # ── page config ───────────────────────────────────────────────────────────────
 st.set_page_config(
@@ -229,98 +108,64 @@ tab_ingest, tab_chat, tab_kb = st.tabs(["📥 Ingest", "💬 Chat", "📚 Knowle
 with tab_ingest:
     st.header("Add a Transcript")
     st.caption(
-        "Paste raw text — a session transcript, article excerpt, book notes, or interview — "
-        "and the engine will extract claims, observe slots, detect gaps, and check for "
-        "conflicts against the existing knowledge base."
+        "Paste a transcript below, or upload one or more `.txt` files. "
+        "The system classifies the domain and entity automatically — "
+        "just provide the raw content and run the pipeline."
     )
 
-    col_text, col_meta = st.columns([2, 1])
+    _MAX_FILE_BYTES = 5 * 1024 * 1024  # 5 MB per file
 
-    with col_text:
-        raw_text = st.text_area(
-            "Raw transcript text",
-            height=320,
-            placeholder="Paste the full transcript or notes here…",
-        )
-
-    with col_meta:
-        st.markdown("**Source details**")
-
-        entity_name = st.text_input(
-            "Entity / topic name",
-            placeholder="e.g. Cap Rate Rules, Acupuncture Meridians, Momentum Strategy",
-            help="The canonical concept this transcript is about.",
-        )
-
-        # Populate domain picker from what is already in the system.
-        try:
-            known_domains = sorted(set(list_policy_domains()))
-        except Exception:
-            known_domains = []
-        domain_options = known_domains + ["— enter new domain —"]
-        domain_pick = st.selectbox("Domain", domain_options, key="ingest_domain")
-        domain_new = ""
-        if domain_pick == "— enter new domain —":
-            domain_new = st.text_input("New domain name", placeholder="e.g. nutrition science")
-        domain = domain_new.strip() or (domain_pick if domain_pick != "— enter new domain —" else "")
-
-        source_kind = st.selectbox(
-            "Source kind",
-            ["external_doc", "user", "internal_wiki"],
-            help=(
-                "external_doc: article or book excerpt.\n"
-                "user: your own notes or observations.\n"
-                "internal_wiki: references an existing claim."
-            ),
-        )
-
-        credibility = st.slider(
-            "Source credibility hint",
-            min_value=0.0,
-            max_value=1.0,
-            value=0.5,
-            step=0.05,
-            help="Your confidence in this source's reliability (0 = unreliable, 1 = definitive). "
-            "Domain evidence bars still apply regardless of this value.",
-        )
+    raw_text = st.text_area(
+        "Paste transcript text",
+        height=320,
+        placeholder="Paste the full transcript or notes here…",
+    )
+    uploaded_files = st.file_uploader(
+        "Or upload .txt transcript files (max 5 MB each)",
+        type=["txt"],
+        accept_multiple_files=True,
+        help="Select one or more plain-text files. Each file is processed as a separate transcript.",
+    )
 
     can_ingest = engine is not None
     if st.button("▶ Run ingest pipeline", type="primary", disabled=not can_ingest):
-        problems = []
-        if not raw_text.strip():
-            problems.append("Paste some text first.")
-        if not entity_name.strip():
-            problems.append("Enter an entity / topic name.")
-        if not domain:
-            problems.append("Choose or enter a domain.")
-        if problems:
-            for p in problems:
-                st.warning(p)
+        texts_to_process: list[tuple[str, str]] = []
+        if raw_text.strip():
+            texts_to_process.append(("pasted text", raw_text.strip()))
+        for f in uploaded_files or []:
+            if f.size > _MAX_FILE_BYTES:
+                st.warning(f"⚠️ `{f.name}` exceeds the 5 MB limit — skipped.")
+                continue
+            try:
+                file_text = f.read().decode("utf-8", errors="replace")
+            except Exception as exc:
+                st.warning(f"⚠️ Could not read `{f.name}`: {exc}")
+                continue
+            if file_text.strip():
+                texts_to_process.append((f.name, file_text.strip()))
+
+        if not texts_to_process:
+            st.warning("Paste some text or upload at least one .txt file.")
         else:
-            # auto-generate a stable source_id from entity + content hash
-            content_hash = str(abs(hash(raw_text)))[:12]
-            source_id = f"ui-{entity_name.strip().lower().replace(' ', '-')}-{content_hash}"
+            for label, text in texts_to_process:
+                if len(texts_to_process) > 1:
+                    st.markdown(f"---\n**Processing: {label}**")
+                content_hash = str(abs(hash(text)))[:12]
+                transcript = TranscriptInput(
+                    transcript_text=text,
+                    source_id=f"ui-{content_hash}",
+                )
+                with st.spinner(
+                    f"Running pipeline for `{label}` "
+                    "(classify → extract → gap check → conflict check → embed)…"
+                    "\n\nThis may take 10–60 s depending on transcript length."
+                ):
+                    try:
+                        outcome = engine.ingest_transcript(transcript)
+                    except Exception as exc:
+                        st.error(f"Ingest failed for `{label}`: {type(exc).__name__}: {exc}")
+                        continue
 
-            transcript = TranscriptInput(
-                transcript_text=raw_text.strip(),
-                entity_name=entity_name.strip(),
-                domain=_canonical_domain(domain),
-                source_kind=source_kind,  # type: ignore[arg-type]
-                source_id=source_id,
-                evidence_credibility=credibility,
-            )
-
-            with st.spinner(
-                "Running pipeline (harbour → extract → gap check → conflict check → embed)…"
-                "\n\nThis may take 10–60 s depending on transcript length and LLM speed."
-            ):
-                try:
-                    outcome = engine.ingest_transcript(transcript)
-                except Exception as exc:
-                    st.error(f"Ingest failed: {type(exc).__name__}: {exc}")
-                    outcome = None
-
-            if outcome:
                 st.success(
                     f"Ingested → entity `{outcome.entity_id}`"
                     + (f" | transcript `{outcome.transcript_id}`" if outcome.transcript_id else "")
@@ -336,9 +181,7 @@ with tab_ingest:
                 if outcome.gap_flags:
                     with st.expander(f"⚠️ {len(outcome.gap_flags)} gap(s) — clarification needed"):
                         for g in outcome.gap_flags:
-                            severity_icon = {"high": "🔴", "medium": "🟡", "low": "⚪"}.get(
-                                g.severity, "⚪"
-                            )
+                            severity_icon = {"high": "🔴", "medium": "🟡", "low": "⚪"}.get(g.severity, "⚪")
                             st.markdown(
                                 f"{severity_icon} **{g.kind}** — {g.question}"
                                 + (f"\n\n> {g.rationale}" if g.rationale else "")
@@ -365,29 +208,22 @@ with tab_ingest:
                         for n in outcome.notes:
                             st.write(f"- {n}")
 
-                # Show the actual claim statements so the user can verify
-                # what the system learned from this transcript.
                 if outcome.claim_ids:
                     with st.expander(f"📋 View extracted claims ({len(outcome.claim_ids)})"):
                         try:
-                            for cid in outcome.claim_ids[:30]:  # cap at 30 to avoid wall of text
+                            for cid in outcome.claim_ids[:30]:
                                 detail = engine.get_claim(cid)
                                 if detail and not detail.get("error"):
                                     claim_data = detail.get("claim", detail)
                                     status = claim_data.get("epistemic_status", "?")
                                     badge = {"Confirmed": "🟢", "Disputed": "🔴"}.get(status, "🟡")
-                                    stmt = claim_data.get("statement", cid)
-                                    st.markdown(f"{badge} `{status}` — {stmt}")
+                                    st.markdown(f"{badge} `{status}` — {claim_data.get('statement', cid)}")
                             if len(outcome.claim_ids) > 30:
                                 st.caption(f"… and {len(outcome.claim_ids) - 30} more.")
                         except Exception:
                             st.caption("(claim detail unavailable — check Neo4j connection)")
 
-                    st.info(
-                        f"💬 Ready to ask questions? Switch to the **Chat** tab "
-                        f"and search within domain `{domain}` to explore what was just ingested.",
-                        icon="👉",
-                    )
+                    st.info("💬 Ready to ask questions? Switch to the **Chat** tab.", icon="👉")
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -422,19 +258,18 @@ with tab_chat:
     )
 
     with st.expander("⚙️ Chat settings", expanded=False):
-        col_a, col_b, col_c = st.columns(3)
-        k_claims = col_a.slider("Claims to retrieve", 2, 12, 6)
-        temperature = col_b.slider("LLM temperature", 0.0, 1.0, 0.2, step=0.05)
         # Build domain list from ingested tags (what's actually in the graph)
         # rather than just policy names (which may have underscore/space drift).
         try:
             _chat_ingested_domains = engine.store.list_domains() if engine else []
         except Exception:
             _chat_ingested_domains = []
+        from knowledge_engine.policy import list_policy_domains as _list_policy_domains
         _chat_domain_options = ["— all domains —"] + sorted(
-            set(_chat_ingested_domains) | set(list_policy_domains() if engine else [])
+            {d.lower().replace(" ", "_") for d in _chat_ingested_domains}
+            | {d.lower().replace(" ", "_") for d in (_list_policy_domains() if engine else [])}
         )
-        filter_domain = col_c.selectbox(
+        filter_domain = st.selectbox(
             "Filter domain (optional)",
             _chat_domain_options,
             key="chat_domain_filter",
@@ -535,7 +370,7 @@ with tab_chat:
                     with st.spinner("Searching knowledge base…"):
                         try:
                             result = engine.search_claims(
-                                prompt, domain=domain_filter, limit=k_claims
+                                prompt, domain=domain_filter, limit=6
                             )
                             if result.get("error"):
                                 search_error = result["error"]
@@ -604,7 +439,6 @@ with tab_chat:
                             answer = mimo.complete_sync(
                                 system=system_prompt,
                                 user=user_prompt,
-                                temperature=temperature,
                                 max_tokens=2000,
                             )
                         except Exception as exc:
@@ -810,7 +644,11 @@ with tab_kb:
         except Exception:
             ingested_domains = []
 
-        all_domains = sorted(set(ingested_domains) | set(list_policy_domains()))
+        from knowledge_engine.policy import list_policy_domains as _list_kbpd
+        all_domains = sorted(
+            {d.lower().replace(" ", "_") for d in ingested_domains}
+            | {d.lower().replace(" ", "_") for d in _list_kbpd()}
+        )
 
         if all_domains:
             col_d, col_btn = st.columns([3, 1])

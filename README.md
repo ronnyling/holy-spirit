@@ -63,7 +63,7 @@ streamlit run app.py
 ```
 
 The app opens at `http://localhost:8503` with three tabs:
-- **Ingest** — paste a transcript or upload a batch of `.txt` files; the form clears after success and a session history table tracks everything ingested this run.
+- **Ingest** — paste a transcript or upload one or more `.txt` files (max 5 MB each). No metadata entry required — the system classifies domain and entity name automatically from the transcript content.
 - **Chat** — two modes selectable via radio: **Research Chat** (RAG grounded in evidence-gated claims, source evidence shown open by default) and **Explore Experience** (world knowledge from the LLM discerned through system experience — `[WORLD VIEW]` → `[EXPERIENCE]` → `[DISCERNED POSITION]`).
 - **Knowledge Base** — live snapshot, **pending slot promotions** queue (review and confirm lifecycle advances), open-conflict resolution panel (enter decision + rationale to close a case), domain browser (full epistemic view: Confirmed + Unverified + Disputed), entity lookup, and cross-domain pattern finder.
 

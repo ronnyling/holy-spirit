@@ -35,10 +35,10 @@ class ClaimDraft(BaseModel):
 class TranscriptInput(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    domain: str
-    entity_name: str
+    domain: str = ""
+    entity_name: str = ""
     transcript_text: str
-    source_kind: Literal["internal_wiki", "external_doc", "user"]
+    source_kind: Literal["internal_wiki", "external_doc", "user"] = "external_doc"
     source_id: str
     source_ref: str | None = None
     evidence_credibility: float = Field(default=0.5, ge=0.0, le=1.0)

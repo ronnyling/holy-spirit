@@ -22,6 +22,15 @@ KNOWN_DOMAINS: tuple[str, ...] = ("trading", "real estate", "tcm")
 
 _SAMPLE_CHARS = 2000
 
+_ENTITY_SYSTEM_PROMPT = (
+    "You extract the main canonical topic or entity this expert transcript is about.\n"
+    "Rules:\n"
+    "1. Answer with a SHORT noun phrase (2-5 words, title case) naming the central concept,\n"
+    "   e.g. 'Cap Rate Rules', 'Momentum Strategy', 'Acupuncture Meridians', 'Dividend Investing'.\n"
+    "2. Be specific enough to name the subject, general enough to group related transcripts.\n"
+    "3. If there is no clear single topic, answer UNKNOWN.\n"
+    "4. No prose, no explanation \u2014 just the noun phrase or UNKNOWN."
+)
 _SYSTEM_PROMPT = (
     "You classify an expert transcript into exactly ONE knowledge domain for a "
     "knowledge base. Allowed domains:\n"
@@ -56,6 +65,18 @@ class DomainClassifier:
 
     def __init__(self, client: SupportsComplete) -> None:
         self._client = client
+
+    def classify_entity_name(self, *, transcript_text: str) -> str | None:
+        """Return a short noun phrase naming the main topic of the transcript, or None."""
+        sample = transcript_text.strip()[:_SAMPLE_CHARS]
+        if not sample:
+            return None
+        raw = self._client.complete_sync(
+            system=_ENTITY_SYSTEM_PROMPT,
+            user=f"Transcript sample:\n{sample}\n",
+        )
+        token = (raw or "").strip().strip('"\'')
+        return None if (not token or "unknown" in token.lower()) else token
 
     def classify(self, *, transcript_text: str, entity_name: str = "") -> str | None:
         """Return a known domain label, or None when the domain is UNKNOWN.
