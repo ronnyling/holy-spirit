@@ -94,6 +94,10 @@ class TranscriptOutcome(BaseModel):
     open_case_ids: list[str] = Field(default_factory=list)
     canonical_claim_ids: list[str] = Field(default_factory=list)
     notes: list[str] = Field(default_factory=list)
+    # Proactive conflict support: when conflicts are detected, the system
+    # gathers evidence and generates a prompt for the user.
+    conflict_prompt: str | None = None
+    gathered_evidence: list[dict] | None = None
 
 
 class ExperienceResponse(BaseModel):

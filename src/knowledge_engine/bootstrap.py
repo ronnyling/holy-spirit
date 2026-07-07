@@ -11,10 +11,14 @@ import os
 import sys
 from pathlib import Path
 
+from .cache import RetrievalCache
 from .embeddings import EmbeddingClient
 from .engine import KnowledgeEngine
 from .extraction import ClaimExtractor
 from .llm import MiMoClient
+from .query_processor import QueryProcessor
+from .registry import TranscriptRegistry
+from .reranker import RerankerClient
 
 
 def load_dotenv(path: str | os.PathLike[str] = ".env") -> bool:
@@ -82,7 +86,15 @@ def build_engine_from_env(*, dotenv_path: str | os.PathLike[str] = ".env") -> Kn
             file=sys.stderr,
         )
 
+    # Wire query-path cache for embedding deduplication.
+    cache = RetrievalCache.from_env()
+    if embedding_client is not None:
+        embedding_client.set_cache(cache)
+
     mimo_client = MiMoClient.from_env()
+
+    # ClaimExtractor auto-tunes parallelism and checkpointing based on file size.
+    # No manual configuration needed — the system selects optimal settings automatically.
     extractor = ClaimExtractor(mimo_client) if mimo_client is not None else None
     if extractor is None:
         print(
@@ -91,7 +103,21 @@ def build_engine_from_env(*, dotenv_path: str | os.PathLike[str] = ".env") -> Kn
             file=sys.stderr,
         )
 
+    registry_path = os.environ.get("KE_REGISTRY_PATH", "./ke_data")
+    registry = TranscriptRegistry(root=registry_path)
+
+    reranker = RerankerClient.from_env()
+    if reranker is None:
+        print(
+            "INFO: KE_RERANKER_PROVIDER=none — cross-encoder reranking disabled "
+            "(retrieval uses evidence-weighted similarity).",
+            file=sys.stderr,
+        )
+
+    query_processor = QueryProcessor.from_env(mimo_client)
+
     return KnowledgeEngine(
         store=store, embedding_client=embedding_client, extractor=extractor,
-        llm_client=mimo_client,
+        llm_client=mimo_client, registry=registry, reranker=reranker,
+        query_processor=query_processor, cache=cache,
     )

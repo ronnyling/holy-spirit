@@ -24,6 +24,10 @@ from __future__ import annotations
 
 import os
 from contextlib import contextmanager
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from .cache import RetrievalCache
 
 import httpx
 from tenacity import (
@@ -96,6 +100,12 @@ class EmbeddingClient:
             else self.base_url
         )
         self._client = httpx.AsyncClient(timeout=60.0)
+        # Optional cache for query-time embeddings (not used during ingestion).
+        self._cache: "RetrievalCache | None" = None
+
+    def set_cache(self, cache: "RetrievalCache") -> None:
+        """Wire a cache for query-time embedding deduplication."""
+        self._cache = cache
 
     @classmethod
     def from_env(cls) -> "EmbeddingClient | None":
@@ -216,8 +226,23 @@ class EmbeddingClient:
         return [e["embedding"] for e in ordered]
 
     def embed_sync(self, text: str) -> list[float]:
-        """Synchronous single embed. For call sites that cannot be async."""
-        return self.embed_batch_sync([text])[0]
+        """Synchronous single embed. For call sites that cannot be async.
+
+        Uses cache when available (query-path). Ingestion-path calls use
+        embed_texts() which bypasses the cache.
+        """
+        if self._cache is not None:
+            from .cache import RetrievalCache
+            cache_key = RetrievalCache.make_key("embed", self.model, text)
+            cached = self._cache.get(cache_key)
+            if cached is not None:
+                return cached
+        result = self.embed_batch_sync([text])[0]
+        if self._cache is not None:
+            from .cache import RetrievalCache
+            cache_key = RetrievalCache.make_key("embed", self.model, text)
+            self._cache.set(cache_key, result)
+        return result
 
     def embed_texts(self, texts: list[str]) -> list[list[float]]:
         """Embed many texts, split into batches of at most ``batch_size``.

@@ -1,0 +1,20 @@
+[QA TRANSCRIPT 08]
+Title: R&D Exploration - Unknown Potential of a Cross-Domain Idea
+Domain: interdisciplinary_rnd
+Purpose: Tests whether system can suggest viable R&D directions from experience without inventing certainty.
+
+Moderator: We are exploring a new product idea: an experience-layer assistant that helps small property investors evaluate buildings using financial, maintenance, and tenant-signal evidence.
+
+Researcher A, Product Strategist: The opportunity is that small investors often over-focus on yield and under-check hidden building risks. A tool could ask structured due-diligence questions before investment decisions.
+
+Researcher B, Data Analyst: Viability depends on evidence availability. We can combine rental yield, vacancy, maintenance records, tenant complaint themes, inspection findings, and comparable transactions. But the system must label missing data and avoid pretending to know building condition.
+
+Researcher C, Domain Expert: The useful intelligence is root-cause guidance. For example, if tenants report musty odor and maintenance records show repeated repainting, the assistant should ask whether moisture is being covered up rather than resolved.
+
+Researcher A: The MVP should not make buy-or-sell recommendations. It should produce a risk map, missing-data checklist, and research plan.
+
+Researcher B: A good R&D question is whether transcript-derived experience can generate better due-diligence checklists than generic templates.
+
+Researcher C: The system should suggest hypotheses and evidence needed, not conclusions beyond the data.
+
+Summary Note: The R&D direction is viable if the system preserves uncertainty, asks for missing evidence, and converts cross-domain experience into structured investigation plans.

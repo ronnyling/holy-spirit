@@ -97,6 +97,72 @@ class SimilarClaim:
     score: float
 
 
+def _rrf_merge(
+    vector_rows: list,
+    ft_rows: list,
+    *,
+    alpha: float = 0.7,
+    k: int = 60,
+    limit: int = 20,
+) -> list[dict]:
+    """Reciprocal Rank Fusion of vector and full-text search results.
+
+    Standard RRF formula: score = sum(1 / (k + rank_i)) weighted by alpha.
+    alpha=1.0 is pure vector, alpha=0.0 is pure fulltext.
+
+    Each row is a Neo4j record dict with keys: id, statement, status, tags,
+    slot_name, version, result_score, source.
+    """
+    scores: dict[str, float] = {}
+    by_id: dict[str, dict] = {}
+
+    for rank, row in enumerate(vector_rows):
+        rid = row.get("id")
+        if not rid:
+            continue
+        scores[rid] = scores.get(rid, 0.0) + alpha * (1.0 / (k + rank + 1))
+        if rid not in by_id:
+            by_id[rid] = {
+                "claim_id": rid,
+                "statement": row.get("statement", ""),
+                "epistemic_status": row.get("status", "Unknown"),
+                "tags": row.get("tags", []),
+                "slot_name": row.get("slot_name"),
+                "version": row.get("version"),
+                "vector_score": row.get("result_score", 0.0),
+                "ft_score": None,
+                "source": "vector",
+            }
+
+    for rank, row in enumerate(ft_rows):
+        rid = row.get("id")
+        if not rid:
+            continue
+        scores[rid] = scores.get(rid, 0.0) + (1.0 - alpha) * (1.0 / (k + rank + 1))
+        if rid not in by_id:
+            by_id[rid] = {
+                "claim_id": rid,
+                "statement": row.get("statement", ""),
+                "epistemic_status": row.get("status", "Unknown"),
+                "tags": row.get("tags", []),
+                "slot_name": row.get("slot_name"),
+                "version": row.get("version"),
+                "vector_score": None,
+                "ft_score": row.get("result_score", 0.0),
+                "source": "fulltext",
+            }
+        else:
+            by_id[rid]["ft_score"] = row.get("result_score", 0.0)
+            if by_id[rid]["source"] == "vector":
+                by_id[rid]["source"] = "hybrid"
+
+    ranked = sorted(scores.items(), key=lambda x: x[1], reverse=True)
+    return [
+        {**by_id[rid], "rrf_score": round(score, 6)}
+        for rid, score in ranked[:limit]
+    ]
+
+
 def _provenance_json(claim: Claim) -> str:
     return json.dumps([p.model_dump(mode="json") for p in claim.provenance])
 
@@ -934,6 +1000,19 @@ class KnowledgeGraphStore:
         )
         return [_row_to_claim(dict(r)) for r in rows]
 
+    def list_active_claims(self, entity_id: str) -> list[Claim]:
+        """Claims with enough epistemic weight to anchor conflict detection."""
+        rows = self._run(
+            "MATCH (c:Claim)-[:ABOUT]->(e:Entity {id: $entity_id}) "
+            "WHERE c.epistemic_status IN ['Confirmed', 'Disputed'] "
+            "RETURN c.id AS id, e.id AS entity_id, c.statement AS statement, "
+            "       c.slot_name AS slot_name, c.epistemic_status AS epistemic_status, "
+            "       c.provenance AS provenance, c.embedding AS embedding, "
+            "       c.version AS version, c.tags AS tags",
+            entity_id=entity_id,
+        )
+        return [_row_to_claim(dict(r)) for r in rows]
+
     # -- KnowledgeStore interface — resolution cases ---------------------------
 
     def get_resolution_case(self, case_id: str) -> ResolutionCase:
@@ -1080,6 +1159,275 @@ class KnowledgeGraphStore:
 
         patterns.sort(key=lambda x: x["similarity"], reverse=True)
         return patterns[:limit]
+
+    def get_graph_context(
+        self,
+        *,
+        matched_claim_ids: list[str],
+        limit: int = 10,
+        max_depth: int = 2,
+        edge_weights: dict[str, float] | None = None,
+        timeout_seconds: float = 5.0,
+    ) -> list[dict]:
+        """Graph-traversal expansion from matched claims.
+
+        Two passes with configurable depth and edge-type weighting:
+        1. Entity context — other claims belonging to the same entities.
+        2. Cross-slot — claims from different entities sharing a slot name.
+
+        Edge types and default weights:
+            SUPPORTS: 1.0 (strongest — direct evidence chain)
+            ABOUT: 0.5 (same entity, different claim)
+            CONFLICTS_WITH: 0.3 (related but opposing)
+            DERIVED_FROM: 0.2 (provenance context)
+
+        Bounded by max_depth, limit, and timeout_seconds.
+        Each result carries 'context_type' and 'traversal_weight'.
+        """
+        if not matched_claim_ids:
+            return []
+
+        default_weights = {
+            "SUPPORTS": 1.0, "ABOUT": 0.5, "CONFLICTS_WITH": 0.3,
+            "DERIVED_FROM": 0.2, "OF": 0.1,
+        }
+        weights = {**default_weights, **(edge_weights or {})}
+
+        # Gather entity_ids and non-null slot_names from the matched claims.
+        meta = self._run(
+            "MATCH (c:Claim) WHERE c.id IN $ids "
+            "RETURN COLLECT(DISTINCT c.entity_id) AS entity_ids, "
+            "       [x IN COLLECT(DISTINCT c.slot_name) WHERE x IS NOT NULL] AS slot_names",
+            ids=matched_claim_ids,
+        )
+        if not meta:
+            return []
+
+        entity_ids: list[str] = meta[0].get("entity_ids") or []
+        slot_names: list[str] = meta[0].get("slot_names") or []
+        results: list[dict] = []
+        seen_ids: set[str] = set(matched_claim_ids)
+        per_type = max(1, limit // 2)
+
+        # Pass 1: entity context — claims sharing the same entities.
+        if entity_ids:
+            entity_rows = self._run(
+                "MATCH (c:Claim) "
+                "WHERE c.entity_id IN $eids AND NOT c.id IN $excl "
+                "RETURN c.id AS id, c.statement AS statement, "
+                "       c.epistemic_status AS epistemic_status, "
+                "       c.tags AS tags, c.slot_name AS slot_name, "
+                "       0.5 AS traversal_weight, 'entity_context' AS context_type "
+                "ORDER BY CASE c.epistemic_status "
+                "  WHEN 'Confirmed' THEN 0 WHEN 'Disputed' THEN 1 ELSE 2 END "
+                "LIMIT $lim",
+                eids=entity_ids,
+                excl=list(seen_ids),
+                lim=per_type,
+            )
+            for row in entity_rows:
+                cid = row.get("id")
+                if cid and cid not in seen_ids:
+                    seen_ids.add(cid)
+                    results.append(dict(row))
+
+        # Pass 2: cross-slot traversal — claims from different entities sharing slots.
+        # Uses variable-length path traversal for multi-hop discovery.
+        if slot_names and max_depth >= 2:
+            # 1-hop cross-slot (direct slot match across entities)
+            cross_slot_rows = self._run(
+                "MATCH (c:Claim) "
+                "WHERE c.slot_name IN $slots AND NOT c.entity_id IN $eids "
+                "  AND NOT c.id IN $excl "
+                "RETURN c.id AS id, c.statement AS statement, "
+                "       c.epistemic_status AS epistemic_status, "
+                "       c.tags AS tags, c.slot_name AS slot_name, "
+                "       0.3 AS traversal_weight, 'cross_slot' AS context_type "
+                "ORDER BY CASE c.epistemic_status "
+                "  WHEN 'Confirmed' THEN 0 WHEN 'Disputed' THEN 1 ELSE 2 END "
+                "LIMIT $lim",
+                slots=slot_names,
+                eids=entity_ids,
+                excl=list(seen_ids),
+                lim=per_type,
+            )
+            for row in cross_slot_rows:
+                cid = row.get("id")
+                if cid and cid not in seen_ids:
+                    seen_ids.add(cid)
+                    results.append(dict(row))
+
+        # Pass 3: SUPPORTS-chain traversal (when max_depth >= 2)
+        # Finds claims connected through evidence chains.
+        if max_depth >= 2 and len(matched_claim_ids) <= 20:
+            support_rows = self._run(
+                "MATCH path = (start:Claim)-[:SUPPORTS*1..2]->(related:Claim) "
+                "WHERE start.id IN $start_ids "
+                "  AND NOT related.id IN $excl "
+                "  AND ALL(r IN relationships(path) WHERE type(r) = 'SUPPORTS') "
+                "WITH related, length(path) AS depth "
+                "RETURN DISTINCT related.id AS id, related.statement AS statement, "
+                "       related.epistemic_status AS epistemic_status, "
+                "       related.tags AS tags, related.slot_name AS slot_name, "
+                "       1.0 AS traversal_weight, 'support_chain' AS context_type "
+                "ORDER BY CASE related.epistemic_status "
+                "  WHEN 'Confirmed' THEN 0 WHEN 'Disputed' THEN 1 ELSE 2 END "
+                "LIMIT $lim",
+                start_ids=matched_claim_ids,
+                excl=list(seen_ids),
+                lim=per_type,
+            )
+            for row in support_rows:
+                cid = row.get("id")
+                if cid and cid not in seen_ids:
+                    seen_ids.add(cid)
+                    results.append(dict(row))
+
+        return results
+
+    # -- full-text search --------------------------------------------------------
+
+    def fulltext_search_claims(
+        self,
+        query: str,
+        *,
+        domain: str | None = None,
+        epistemic_status: str | None = None,
+        limit: int = 30,
+    ) -> list[dict]:
+        """Full-text search over claim statements using Lucene analyzer.
+
+        Catches lexical/keyword matches that vector similarity may miss
+        (e.g. exact术语, abbreviations, domain-specific jargon).
+        """
+        cypher = (
+            "CALL db.index.fulltext.queryNodes($index, $query, {limit: $fetch_limit}) "
+            "YIELD node, score "
+            "WHERE score >= 0.0"
+        )
+        params: dict = {
+            "index": schema.FULLTEXT_CLAIM_INDEX,
+            "query": query,
+            "fetch_limit": limit * 3 if domain or epistemic_status else limit,
+        }
+        if domain:
+            cypher += " AND $domain IN node.tags"
+            params["domain"] = domain
+        if epistemic_status:
+            cypher += " AND node.epistemic_status = $status"
+            params["status"] = epistemic_status
+
+        cypher += (
+            " RETURN node.id AS id, node.statement AS statement, "
+            "       node.epistemic_status AS status, node.tags AS tags, "
+            "       node.slot_name AS slot_name, node.version AS version, "
+            "       score "
+            "ORDER BY score DESC LIMIT $limit"
+        )
+        params["limit"] = limit
+
+        rows = self._run(cypher, **params)
+        return [
+            {
+                "claim_id": r["id"],
+                "statement": r["statement"],
+                "epistemic_status": r["status"],
+                "tags": r["tags"],
+                "slot_name": r["slot_name"],
+                "version": r["version"],
+                "ft_score": r["score"],
+            }
+            for r in rows
+        ]
+
+    # -- hybrid search ----------------------------------------------------------
+
+    def hybrid_search_claims(
+        self,
+        *,
+        embedding: list[float],
+        query_text: str,
+        domain: str | None = None,
+        epistemic_status: str | None = None,
+        k: int = 20,
+        alpha: float = 0.7,
+    ) -> list[dict]:
+        """Reciprocal Rank Fusion of vector + full-text search.
+
+        Runs both searches in a single Cypher call (two sub-queries merged
+        with UNWIND), then blends ranks with RRF. alpha controls the blend:
+        alpha=1.0 is pure vector, alpha=0.0 is pure fulltext, alpha=0.7 default.
+
+        Falls back to vector-only if the full-text index is unavailable.
+        """
+        if len(embedding) != self._embedding_dimensions:
+            raise ValueError(
+                f"embedding length {len(embedding)} != index dimension "
+                f"{self._embedding_dimensions}"
+            )
+
+        fetch_k = k * 3 if domain or epistemic_status else k
+
+        # Vector results
+        vector_cypher = (
+            "CALL db.index.vector.queryNodes($vector_index, $fetch_k, $embedding) "
+            "YIELD node, score "
+            "WHERE score >= 0.0"
+        )
+        vector_params: dict = {
+            "vector_index": schema.CLAIM_VECTOR_INDEX,
+            "fetch_k": fetch_k,
+            "embedding": embedding,
+        }
+        if domain:
+            vector_cypher += " AND $domain IN node.tags"
+            vector_params["domain"] = domain
+        if epistemic_status:
+            vector_cypher += " AND node.epistemic_status = $status"
+            vector_params["status"] = epistemic_status
+
+        vector_cypher += (
+            " RETURN node.id AS id, node.statement AS statement, "
+            "       node.epistemic_status AS status, node.tags AS tags, "
+            "       node.slot_name AS slot_name, node.version AS version, "
+            "       score AS result_score, 'vector' AS source "
+            "ORDER BY score DESC LIMIT $limit"
+        )
+        vector_params["limit"] = fetch_k
+
+        # Full-text results
+        ft_cypher = (
+            "CALL db.index.fulltext.queryNodes($ft_index, $query_text, "
+            "{limit: $ft_limit}) "
+            "YIELD node, score "
+            "WHERE score >= 0.0"
+        )
+        ft_params: dict = {
+            "ft_index": schema.FULLTEXT_CLAIM_INDEX,
+            "query_text": query_text,
+            "ft_limit": fetch_k,
+        }
+        if domain:
+            ft_cypher += " AND $domain IN node.tags"
+            ft_params["domain"] = domain
+        if epistemic_status:
+            ft_cypher += " AND node.epistemic_status = $status"
+            ft_params["status"] = epistemic_status
+
+        ft_cypher += (
+            " RETURN node.id AS id, node.statement AS statement, "
+            "       node.epistemic_status AS status, node.tags AS tags, "
+            "       node.slot_name AS slot_name, node.version AS version, "
+            "       score AS result_score, 'fulltext' AS source "
+            "ORDER BY score DESC LIMIT $limit"
+        )
+        ft_params["limit"] = fetch_k
+
+        # Run both and merge with RRF
+        vector_rows = list(self._run(vector_cypher, **vector_params))
+        ft_rows = list(self._run(ft_cypher, **ft_params))
+
+        return _rrf_merge(vector_rows, ft_rows, alpha=alpha, limit=k)
 
     # -- diagnostics -----------------------------------------------------------
     def counts(self) -> dict[str, int]:

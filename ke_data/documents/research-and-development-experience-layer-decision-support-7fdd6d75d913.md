@@ -1,0 +1,30 @@
+# Transcript — Experience Layer Decision Support
+
+## Metadata
+
+- **Transcript ID:** `research-and-development-experience-layer-decision-support-7fdd6d75d913`
+- **Domain:** research and development
+- **Entity:** Experience Layer Decision Support
+- **Source kind:** external_doc
+- **Source id:** ui-213531060909
+- **SHA-256:** `7fdd6d75d91380ea3a2b734b33d48462c6899bef17e36f1b3feba820d478a575`
+- **Ingested at:** 2026-07-03T18:32:24.572353+00:00
+- **Characters:** 1582
+- **Chunks:** 2
+
+## Chunks
+
+### Chunk 0
+
+_Characters 0–1196 · ~299 tokens_
+
+[QA TRANSCRIPT 12]
+Title: R&D Viability Conflict - Experience Layer for Decision Support
+Domain: interdisciplinary_rnd
+Purpose: Tests ability to reason about unknown potential, viability, and research planning under disagreement. Moderator: We are evaluating whether an experience-layer assistant can help teams make better decisions from expert transcripts. Researcher A, Optimist: The potential is high because teams repeatedly forget lessons from prior discussions. If the system retrieves preserved dissent and missing-data warnings, it could improve decision quality. Researcher B, Skeptic: Potential is not proof. The assistant could create false confidence if users treat retrieved experience as truth. If provenance is weak or conflicting claims are hidden, the system becomes dangerous. Researcher C, Methodologist: The next step is an experiment, not a launch claim. Compare three conditions: no assistant, generic assistant, and experience-grounded assistant. Measure whether users identify missing data, preserve dissent, avoid false absolutes, and propose better next investigations. Researcher A: I agree the product should start as research support, not autonomous decision-making.
+
+### Chunk 1
+
+_Characters 1203–1580 · ~129 tokens_
+
+and propose better next investigations. Researcher A: I agree the product should start as research support, not autonomous decision-making. Researcher B: Include adversarial tests where the user pressures the assistant to ignore uncertainty. Researcher C: Success means the assistant improves reasoning quality while still saying "unknown" when evidence is insufficient. Summary Note: There is positive potential, but viability depends on measured improvement, provenance discipline, and resistance to overconfidence.

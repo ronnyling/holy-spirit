@@ -1,0 +1,22 @@
+[QA TRANSCRIPT 02]
+Title: Stock Trading - Conflicting Schools of Thought on Drawdown Buying
+Domain: stock_trading
+Purpose: Existing domain, conflict between value investing, trend following, and risk-first schools.
+
+Moderator: Scenario: a stock falls 30 percent in six months. Is that an opportunity?
+
+Expert A, Value Investor: A 30 percent drawdown can create opportunity if intrinsic value is unchanged. I look for temporary sentiment pressure, stable earnings power, and insider alignment. If those hold, the lower price improves margin of safety.
+
+Expert B, Trend Follower: I disagree with treating a 30 percent fall as automatically attractive. A drawdown can indicate persistent negative information. My school waits for price stabilization and improving relative strength before conviction increases.
+
+Expert C, Balance Sheet Analyst: Both of you are missing the first root cause check. If the decline follows a dividend cut, covenant breach, auditor warning, or refinancing stress, the drawdown is a symptom, not the disease. Buying just because price is lower would be premature.
+
+Expert A: I accept that point. My method requires fundamentals to be intact. I would not buy if the drawdown reflects permanent impairment.
+
+Expert B: My method treats price trend as evidence that the market may know something before the documents clearly show it.
+
+Expert C: My conclusion is conditional: drawdown plus intact cash generation may be research-worthy; drawdown plus financing stress is a warning.
+
+Moderator: Should we store one canonical rule?
+
+Expert C: No. Store conditional claims and conflict history. The safe knowledge is: price fall alone is insufficient; root cause matters.

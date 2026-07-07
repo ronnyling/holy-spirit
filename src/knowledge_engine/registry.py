@@ -52,6 +52,9 @@ class TranscriptRecord(BaseModel):
     raw_path: str
     document_path: str
     ingested_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    # Processing status: "harboured" = file written, "processing" = extraction running,
+    # "complete" = all steps done. Only "complete" is treated as a true duplicate.
+    processing_status: str = "harboured"
 
 
 class HarbourResult(BaseModel):
@@ -62,6 +65,8 @@ class HarbourResult(BaseModel):
     record: TranscriptRecord
     created: bool
     chunks: list[Chunk] = Field(default_factory=list)
+    # True if this content was already fully processed (safe to skip extraction)
+    already_complete: bool = False
 
 
 class TranscriptRegistry:
@@ -113,8 +118,14 @@ class TranscriptRegistry:
         digest = self.content_hash(normalized)
         existing = self.find_by_hash(digest)
         if existing is not None:
-            # Housekeeping: identical content already harboured — do not duplicate.
-            return HarbourResult(record=existing, created=False, chunks=self.chunker.chunk(normalized))
+            # Only skip if processing was fully completed. If interrupted mid-process,
+            # allow re-processing to finish the remaining steps.
+            if existing.processing_status == "complete":
+                return HarbourResult(record=existing, created=False, chunks=self.chunker.chunk(normalized), already_complete=True)
+            # Otherwise, reset for a fresh processing run.
+            existing.processing_status = "harboured"
+            self._save_manifest()
+            return HarbourResult(record=existing, created=False, chunks=self.chunker.chunk(normalized), already_complete=False)
 
         chunks = self.chunker.chunk(normalized)
         transcript_id = f"{_slug(domain)}-{_slug(entity_name)}-{digest[:12]}"
@@ -160,6 +171,14 @@ class TranscriptRegistry:
         self._save_manifest()
 
         return HarbourResult(record=record, created=True, chunks=chunks)
+
+    def mark_complete(self, transcript_id: str) -> None:
+        """Mark a transcript as fully processed (extraction + embedding done)."""
+        record = self._by_id.get(transcript_id)
+        if record is None:
+            return
+        record.processing_status = "complete"
+        self._save_manifest()
 
     def _load_manifest(self) -> None:
         if not self.manifest_path.exists():

@@ -1,0 +1,30 @@
+# Transcript — Manufacturing Quality Root Cause Analysis
+
+## Metadata
+
+- **Transcript ID:** `manufacturing-quality-manufacturing-quality-root-cause-analysis-2ff4465679a5`
+- **Domain:** manufacturing quality
+- **Entity:** Manufacturing Quality Root Cause Analysis
+- **Source kind:** external_doc
+- **Source id:** ui-220316277741
+- **SHA-256:** `2ff4465679a57db8403eb41694254eb4706c28638bd99516d7bc0ec00ee142e3`
+- **Ingested at:** 2026-07-03T16:59:00.427421+00:00
+- **Characters:** 1530
+- **Chunks:** 2
+
+## Chunks
+
+### Chunk 0
+
+_Characters 0–1171 · ~292 tokens_
+
+[QA TRANSCRIPT 05]
+Title: New Domain - Manufacturing Quality Root Cause Analysis
+Domain: manufacturing_quality
+Purpose: New unregistered domain; tests how system handles domain not registered yet. Moderator: The current knowledge engine may not have a manufacturing quality domain. Please discuss a recurring product defect. Engineer A, Process Engineer: The assembly line reports scratches on aluminum housings after final inspection. The surface team blames packaging, but the defect location is inconsistent with packaging contact points. Engineer B, Quality Engineer: I would not accept packaging as the root cause yet. We need defect mapping by station, lot, operator shift, and handling step. A surface scratch found at final inspection may have originated much earlier. Engineer C, Maintenance Technician: There was a fixture change two weeks ago. The new guide rail has a rough edge. The timing of the defect increase matches the fixture change more closely than packaging changes. Engineer A: That is plausible. The root cause hypothesis should be tested by inspecting guide rails, reviewing defect heat maps, and running a controlled batch with the old fixture.
+
+### Chunk 1
+
+_Characters 1178–1529 · ~124 tokens_
+
+root cause hypothesis should be tested by inspecting guide rails, reviewing defect heat maps, and running a controlled batch with the old fixture. Engineer B: The experience we should store is methodological: do not stop at the last visible process step. Trace when and where the defect could first appear. Summary Note: New-domain claim: recurring defects require process-stage evidence, time correlation, and controlled isolation. The system should not force this into stock, real estate, or TCM.

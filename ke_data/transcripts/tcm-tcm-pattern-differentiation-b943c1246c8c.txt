@@ -1,0 +1,18 @@
+[QA TRANSCRIPT 04]
+Title: TCM-Style Pattern Discussion - Missing Context and School Differences
+Domain: tcm
+Purpose: Existing domain, different schools of thought, gap-before-conflict. Fictional QA data only; not medical guidance.
+
+Moderator: This is a software QA transcript and not clinical advice. We are testing whether the engine preserves missing context and dissent.
+
+Practitioner A, Pattern Differentiation School: When a person reports recurring tiredness and feeling cold easily, I would first ask about sleep, digestion, stress, and duration. I would not jump directly to a formula. The pattern cannot be confirmed from two symptoms.
+
+Practitioner B, Modern Integrative Clinician: I agree that the symptom list is incomplete. I would also suggest ruling out non-TCM explanations through appropriate professional evaluation, because tiredness can come from many causes. The system should flag missing age, duration, severity, medication history, and red flags.
+
+Practitioner C, Classical Text School: From a classical perspective, the same surface symptom can belong to different patterns. Feeling cold with poor appetite differs from feeling cold with acute chills. The root pattern cannot be inferred without pulse, tongue, onset, and accompanying signs.
+
+Practitioner A: My disagreement is with premature certainty. I object to statements like "cold equals warming approach" without context.
+
+Practitioner B: The safe canonical memory should be that symptom labels are not enough. The next step is clarification and professional context, not treatment selection.
+
+Summary Note: There is consensus against surface-level diagnosis. There is school difference in framework, but all agree missing context must be flagged before any conclusion.

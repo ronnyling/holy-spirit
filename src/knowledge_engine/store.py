@@ -74,6 +74,16 @@ class KnowledgeStore:
             if claim.entity_id == entity_id and claim.epistemic_status == EpistemicStatus.CONFIRMED
         ]
 
+    _ACTIVE_STATUSES = {EpistemicStatus.CONFIRMED, EpistemicStatus.DISPUTED}
+
+    def list_active_claims(self, entity_id: str) -> list[Claim]:
+        """Claims with enough epistemic weight to anchor conflict detection."""
+        return [
+            claim
+            for claim in self.claims.values()
+            if claim.entity_id == entity_id and claim.epistemic_status in self._ACTIVE_STATUSES
+        ]
+
     def observe_slot(self, entity_id: str, slot_name: str, description: str | None = None) -> Slot:
         key = (entity_id, slot_name.strip().lower())
         slot_id = self._slot_index.get(key)
@@ -134,6 +144,10 @@ class KnowledgeStore:
     def list_pending_slot_promotions(self) -> list[dict]:
         """Return all pending slot promotion candidates."""
         return list(self.pending_promotions.values())
+
+    def get_graph_context(self, *, matched_claim_ids: list[str], limit: int = 10) -> list[dict]:
+        """Graph traversal not available in the JSON store — returns empty."""
+        return []
 
     def confirm_slot(self, entity_id: str, slot_name: str, target: SlotLifecycle, confirmed_by: str) -> Slot:
         if not confirmed_by.strip():

@@ -20,10 +20,10 @@ class StubClient:
 
     def __init__(self, response: str) -> None:
         self.response = response
-        self.calls: list[dict[str, str]] = []
+        self.calls: list[dict[str, object]] = []
 
-    def complete_sync(self, *, system: str, user: str) -> str:
-        self.calls.append({"system": system, "user": user})
+    def complete_sync(self, *, system: str, user: str, max_tokens: int = 4000) -> str:
+        self.calls.append({"system": system, "user": user, "max_tokens": max_tokens})
         return self.response
 
 
@@ -48,6 +48,7 @@ def test_parse_clean_json_array():
     assert drafts[0].evidence == []
     assert drafts[1].observed_slots == []
     assert drafts[1].slot_name is None
+    assert stub.calls[0]["max_tokens"] == 8_000
 
 
 def test_parse_tolerates_code_fences_and_prose():
@@ -147,7 +148,7 @@ class MultiChunkStub:
     def __init__(self) -> None:
         self.calls: list[str] = []
 
-    def complete_sync(self, *, system: str, user: str) -> str:
+    def complete_sync(self, *, system: str, user: str, max_tokens: int = 4000) -> str:
         self.calls.append(user)
         if "ALPHA" in user:
             return (

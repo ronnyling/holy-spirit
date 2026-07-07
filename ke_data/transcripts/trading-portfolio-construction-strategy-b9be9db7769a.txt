@@ -1,0 +1,1 @@
+[Expert C (rotation)] Static portfolio allocation is suboptimal. Sector rotation strategies outperform both diversification and concentration by adapting to regimes.

@@ -19,11 +19,14 @@ degrades gracefully and tells you exactly what is unavailable.
 
 from __future__ import annotations
 
+import json
 import sys
+import time
 from datetime import datetime
 from pathlib import Path
 
 import streamlit as st
+import streamlit.components.v1 as components
 
 # ── path setup ────────────────────────────────────────────────────────────────
 sys.path.insert(0, str(Path(__file__).parent / "src"))
@@ -40,6 +43,17 @@ st.set_page_config(
     page_icon="🧠",
     layout="wide",
     initial_sidebar_state="expanded",
+)
+
+# ── custom CSS for scrollable containers ──────────────────────────────────────
+st.markdown(
+    """
+    <style>
+    /* Make chat_input stay sticky at the bottom */
+    .stChatInput { position: sticky; bottom: 0; z-index: 999; }
+    </style>
+    """,
+    unsafe_allow_html=True,
 )
 
 # ── cached resources (built once per Streamlit server start) ──────────────────
@@ -59,6 +73,121 @@ def _get_engine():
 def _get_mimo() -> MiMoClient | None:
     load_dotenv()
     return MiMoClient.from_env()
+
+
+def _render_copy_button(text: str, *, key: str) -> None:
+        """Render a small clipboard button for a chat response."""
+        button_id = f"copy-response-{key}"
+        payload = json.dumps(text)
+        html = r"""
+                <div style="display:flex; justify-content:flex-end; margin:0.25rem 0 0.5rem;">
+                    <button
+                        id="__BUTTON_ID__"
+                        type="button"
+                        aria-label="Copy response"
+                        style="
+                            border: 1px solid rgba(128,128,128,0.45);
+                            background: transparent;
+                            color: inherit;
+                            border-radius: 0.55rem;
+                            padding: 0.35rem 0.75rem;
+                            font-size: 0.82rem;
+                            cursor: pointer;
+                            transition: background-color 0.15s ease, color 0.15s ease, border-color 0.15s ease;
+                        "
+                    >Copy response</button>
+                </div>
+                <script>
+                    const button = document.getElementById("__BUTTON_ID__");
+                    const text = __PAYLOAD__;
+
+                    function parseColor(color) {
+                        if (!color) {
+                            return null;
+                        }
+                          const match = color.match(/rgba?\((\d+),\s*(\d+),\s*(\d+)(?:,\s*([\d.]+))?\)/i);
+                        if (!match) {
+                            return null;
+                        }
+                        return {
+                            r: Number(match[1]),
+                            g: Number(match[2]),
+                            b: Number(match[3]),
+                            a: match[4] === undefined ? 1 : Number(match[4]),
+                        };
+                    }
+
+                    function luminance(rgb) {
+                        const channels = [rgb.r, rgb.g, rgb.b].map((value) => {
+                            const normalized = value / 255;
+                            return normalized <= 0.03928
+                                ? normalized / 12.92
+                                : Math.pow((normalized + 0.055) / 1.055, 2.4);
+                        });
+                        return 0.2126 * channels[0] + 0.7152 * channels[1] + 0.0722 * channels[2];
+                    }
+
+                    function parentCanvasColor() {
+                        try {
+                            const parentDocument = window.parent.document;
+                            const candidates = [
+                                parentDocument.querySelector(".stApp"),
+                                parentDocument.body,
+                                parentDocument.documentElement,
+                            ].filter(Boolean);
+                            for (const element of candidates) {
+                                const parsed = parseColor(window.parent.getComputedStyle(element).backgroundColor);
+                                if (parsed && parsed.a !== 0) {
+                                    return parsed;
+                                }
+                            }
+                        } catch (error) {
+                            // Fall back to a light canvas if the parent frame cannot be inspected.
+                        }
+                        return { r: 255, g: 255, b: 255, a: 1 };
+                    }
+
+                    function applyTheme() {
+                        const canvas = parentCanvasColor();
+                        const isDark = luminance(canvas) < 0.5;
+                        button.style.color = isDark ? "#f8fafc" : "#0f172a";
+                        button.style.borderColor = isDark ? "rgba(255,255,255,0.32)" : "rgba(15,23,42,0.18)";
+                        button.style.backgroundColor = isDark ? "rgba(255,255,255,0.06)" : "rgba(15,23,42,0.03)";
+                    }
+
+                    applyTheme();
+
+                    button.addEventListener("click", async () => {
+                        try {
+                            await navigator.clipboard.writeText(text);
+                        } catch (error) {
+                            const area = document.createElement("textarea");
+                            area.value = text;
+                            area.style.position = "fixed";
+                            area.style.left = "-9999px";
+                            area.style.top = "0";
+                            document.body.appendChild(area);
+                            area.focus();
+                            area.select();
+                            document.execCommand("copy");
+                            area.remove();
+                        }
+                        const original = button.textContent;
+                        button.textContent = "Copied";
+                        setTimeout(() => {
+                            button.textContent = original;
+                        }, 1200);
+                    });
+                </script>
+                """
+        components.html(
+                html.replace("__BUTTON_ID__", button_id).replace("__PAYLOAD__", payload),
+                height=56,
+                scrolling=False,
+        )
+
+
+
 
 
 engine, engine_error = _get_engine()
@@ -97,6 +226,10 @@ with st.sidebar:
 # ── session state initialisation ─────────────────────────────────────────────
 if "messages" not in st.session_state:
     st.session_state.messages = []
+if "uploader_key" not in st.session_state:
+    st.session_state.uploader_key = 0
+if "last_ingest_banner" not in st.session_state:
+    st.session_state.last_ingest_banner = None
 
 # ── tabs ──────────────────────────────────────────────────────────────────────
 tab_ingest, tab_chat, tab_kb = st.tabs(["📥 Ingest", "💬 Chat", "📚 Knowledge Base"])
@@ -113,6 +246,10 @@ with tab_ingest:
         "just provide the raw content and run the pipeline."
     )
 
+    if st.session_state.last_ingest_banner:
+        st.success(st.session_state.last_ingest_banner)
+        st.session_state.last_ingest_banner = None
+
     _MAX_FILE_BYTES = 5 * 1024 * 1024  # 5 MB per file
 
     raw_text = st.text_area(
@@ -125,14 +262,17 @@ with tab_ingest:
         type=["txt"],
         accept_multiple_files=True,
         help="Select one or more plain-text files. Each file is processed as a separate transcript.",
+        key=f"uploader_{st.session_state.uploader_key}",
     )
 
     can_ingest = engine is not None
     if st.button("▶ Run ingest pipeline", type="primary", disabled=not can_ingest):
         texts_to_process: list[tuple[str, str]] = []
+        had_uploaded_files = False
         if raw_text.strip():
             texts_to_process.append(("pasted text", raw_text.strip()))
         for f in uploaded_files or []:
+            had_uploaded_files = True
             if f.size > _MAX_FILE_BYTES:
                 st.warning(f"⚠️ `{f.name}` exceeds the 5 MB limit — skipped.")
                 continue
@@ -147,6 +287,9 @@ with tab_ingest:
         if not texts_to_process:
             st.warning("Paste some text or upload at least one .txt file.")
         else:
+            any_error = False
+            ingest_outcomes = []
+            ingest_timings = []
             for label, text in texts_to_process:
                 if len(texts_to_process) > 1:
                     st.markdown(f"---\n**Processing: {label}**")
@@ -160,23 +303,52 @@ with tab_ingest:
                     "(classify → extract → gap check → conflict check → embed)…"
                     "\n\nThis may take 10–60 s depending on transcript length."
                 ):
+                    progress_bar = st.progress(0, text="Starting…")
+                    status_text = st.empty()
+                    _stage_labels = {
+                        "dedup_check": "1. Checking duplicates",
+                        "classify": "2. Classifying domain",
+                        "harbour": "3. Harbouring transcript",
+                        "extract": "4. Extracting claims",
+                        "process_claims": "5. Processing claims",
+                        "gap_check": "6. Detecting gaps",
+                        "embed": "7. Embedding claims",
+                        "conflict_check": "8. Checking conflicts",
+                    }
+
+                    def _update_progress(pct: float, stage: str, detail: str | None = None) -> None:
+                        label = _stage_labels.get(stage, stage)
+                        progress_bar.progress(min(pct, 1.0), text=f"{label} ({pct:.0%})")
+                        if detail:
+                            status_text.caption(detail)
+
                     try:
-                        outcome = engine.ingest_transcript(transcript)
+                        _t0 = time.monotonic()
+                        outcome = engine.ingest_transcript(transcript, progress_callback=_update_progress)
+                        _elapsed = time.monotonic() - _t0
                     except Exception as exc:
                         st.error(f"Ingest failed for `{label}`: {type(exc).__name__}: {exc}")
+                        any_error = True
                         continue
+                    finally:
+                        progress_bar.empty()
+                        status_text.empty()
 
+                ingest_outcomes.append(outcome)
+                ingest_timings.append((label, _elapsed))
                 st.success(
                     f"Ingested → entity `{outcome.entity_id}`"
                     + (f" | transcript `{outcome.transcript_id}`" if outcome.transcript_id else "")
+                    + (f" | {_elapsed:.1f}s" if _elapsed else "")
                 )
 
-                m1, m2, m3, m4, m5 = st.columns(5)
-                m1.metric("Claims extracted", len(outcome.claim_ids))
+                m1, m2, m3, m4, m5, m6 = st.columns(6)
+                m1.metric("Claims", len(outcome.claim_ids))
                 m2.metric("Confirmed", len(outcome.confirmed_claim_ids))
                 m3.metric("Unverified", len(outcome.unverified_claim_ids))
-                m4.metric("Gaps flagged", len(outcome.gap_flags))
+                m4.metric("Gaps", len(outcome.gap_flags))
                 m5.metric("Conflicts", len(outcome.conflict_summaries))
+                m6.metric("Time", f"{_elapsed:.1f}s" if _elapsed else "-")
 
                 if outcome.gap_flags:
                     with st.expander(f"⚠️ {len(outcome.gap_flags)} gap(s) — clarification needed"):
@@ -225,17 +397,39 @@ with tab_ingest:
 
                     st.info("💬 Ready to ask questions? Switch to the **Chat** tab.", icon="👉")
 
+            # Clear the file uploader after all files are processed without errors.
+            # Uses Streamlit's key-rotation idiom (new key → fresh widget instance).
+            if had_uploaded_files and not any_error:
+                uploaded_count = sum(1 for lbl, _ in texts_to_process if lbl != "pasted text")
+                if uploaded_count:
+                    total_claims = sum(len(o.claim_ids) for o in ingest_outcomes)
+                    total_confirmed = sum(len(o.confirmed_claim_ids) for o in ingest_outcomes)
+                    total_gaps = sum(len(o.gap_flags) for o in ingest_outcomes)
+                    total_conflicts = sum(len(o.conflict_summaries) for o in ingest_outcomes)
+                    total_time = sum(t for _, t in ingest_timings if t)
+                    file_summary = ", ".join(
+                        f"{lbl} ({t:.1f}s)" if t else lbl
+                        for lbl, t in ingest_timings
+                    )
+                    st.session_state.last_ingest_banner = (
+                        f"✅ {uploaded_count} file(s) ingested in {total_time:.1f}s — "
+                        f"{total_claims} claims ({total_confirmed} confirmed), "
+                        f"{total_gaps} gaps, {total_conflicts} conflicts\n"
+                        f"Files: {file_summary}"
+                    )
+                    st.session_state.uploader_key += 1
+                    st.rerun()
+
 
 # ─────────────────────────────────────────────────────────────────────────────
 # TAB 2 — CHAT
 # ─────────────────────────────────────────────────────────────────────────────
 with tab_chat:
-    st.header("Research Chat")
+    st.header("Chat")
     st.caption(
-        "Ask anything. The engine retrieves the most relevant evidence-gated claims "
-        "from the knowledge base and grounds MiMo's answer in them. "
-        "Confirmed vs Unverified status is preserved — the LLM cannot invent knowledge "
-        "that isn't in the system."
+        "Ask anything. The engine detects intent automatically — conversational "
+        "messages get a direct reply; domain questions are grounded in the "
+        "evidence-gated knowledge base and synthesized with world knowledge."
     )
 
     chat_ready = engine is not None and mimo is not None
@@ -245,21 +439,7 @@ with tab_chat:
         else:
             st.info("Chat requires MiMo — set `KE_MIMO_API_KEY` in `.env`.")
 
-    chat_mode = st.radio(
-        "Mode",
-        ["💬 Research Chat", "🧠 Explore Experience"],
-        horizontal=True,
-        help=(
-            "**Research Chat**: retrieves matching claims from your knowledge base and "
-            "grounds the answer in them.\n\n"
-            "**Explore Experience**: combines what the world generally knows with your "
-            "system's accumulated experience to produce a discerned, opinionated view."
-        ),
-    )
-
     with st.expander("⚙️ Chat settings", expanded=False):
-        # Build domain list from ingested tags (what's actually in the graph)
-        # rather than just policy names (which may have underscore/space drift).
         try:
             _chat_ingested_domains = engine.store.list_domains() if engine else []
         except Exception:
@@ -278,203 +458,123 @@ with tab_chat:
             None if filter_domain == "— all domains —" else filter_domain
         )
 
-    # Render conversation history.
-    for msg in st.session_state.messages:
-        with st.chat_message(msg["role"]):
-            st.markdown(msg["content"])
-            if msg.get("sources"):
-                with st.expander(f"Sources ({len(msg['sources'])} claims)"):
-                    for src in msg["sources"]:
-                        badge = (
-                            "🟢"
-                            if src.get("epistemic_status") == "Confirmed"
-                            else ("🔴" if src.get("epistemic_status") == "Disputed" else "🟡")
-                        )
-                        tags = src.get("tags", [])
-                        tag_str = f" `{'`, `'.join(tags)}`" if tags else ""
-                        sim = src.get("similarity")
-                        sim_str = f" *(sim {sim:.2f})*" if sim is not None else ""
-                        st.markdown(
-                            f"{badge} **{src.get('epistemic_status', '?')}**"
-                            f"{tag_str}{sim_str}  \n{src.get('statement', '')}"
-                        )
+    # Render conversation history — show last N messages, chat_input stays sticky
+    _SHOW_LAST = 20
+    if st.session_state.messages:
+        _total_msgs = len(st.session_state.messages)
+        _show_older = st.session_state.get("show_older_messages", False)
+        _start_idx = 0 if _show_older or _total_msgs <= _SHOW_LAST else _total_msgs - _SHOW_LAST
+
+        if _total_msgs > _SHOW_LAST and not _show_older:
+            st.caption(f"Showing last {_SHOW_LAST} of {_total_msgs} messages")
+            if st.button("⬆ Show older messages", key="show_older"):
+                st.session_state.show_older_messages = True
+                st.rerun()
+
+        for msg_idx in range(_start_idx, _total_msgs):
+            msg = st.session_state.messages[msg_idx]
+            with st.chat_message(msg["role"]):
+                st.markdown(msg["content"])
+                if msg.get("elapsed"):
+                    st.caption(f"⏱ {msg['elapsed']:.1f}s")
+                if msg.get("role") == "assistant":
+                    _render_copy_button(msg["content"], key=f"history-{msg_idx}")
+                if msg.get("sources"):
+                    direct = [s for s in msg["sources"] if s.get("context_type") == "direct"]
+                    connected = [s for s in msg["sources"] if s.get("context_type") != "direct"]
+                    with st.expander(f"📎 Experience ({len(direct)} direct · {len(connected)} graph connections)"):
+                        for src in msg["sources"]:
+                            status = src.get("epistemic_status") or src.get("status") or "Unknown"
+                            badge = {"Confirmed": "🟢", "Disputed": "🔴"}.get(status, "🟡") if src.get("context_type") == "direct" else "🔗"
+                            tags = src.get("tags") or []
+                            tag_str = f" `{'`, `'.join(tags)}`" if tags else ""
+                            sim = src.get("similarity") or src.get("score")
+                            sim_str = f" *(sim {sim:.3f})*" if sim is not None else ""
+                            st.markdown(f"{badge} **{status}**{tag_str}{sim_str}  \n{src.get('statement', '')}")
+
+        if _show_older and _total_msgs > _SHOW_LAST:
+            if st.button("⬇ Show recent messages", key="show_recent"):
+                st.session_state.show_older_messages = False
+                st.rerun()
 
     if chat_ready:
-        if prompt := st.chat_input("Ask the knowledge base…"):
+        if prompt := st.chat_input("Ask anything…"):
             st.session_state.messages.append({"role": "user", "content": prompt})
             with st.chat_message("user"):
                 st.markdown(prompt)
 
             with st.chat_message("assistant"):
+                _t_chat = time.monotonic()
+                with st.spinner("Thinking…"):
+                    try:
+                        exp = engine.explore_experience(prompt, domain=domain_filter)
+                    except Exception as exc:
+                        exp = {"error": f"{type(exc).__name__}: {exc}"}
+                _chat_elapsed = time.monotonic() - _t_chat
 
-                # ── Explore Experience mode ───────────────────────────────────
-                if chat_mode == "🧠 Explore Experience":
-                    with st.spinner("Fetching world knowledge and system experience…"):
-                        try:
-                            exp = engine.explore_experience(prompt, domain=domain_filter)
-                        except Exception as exc:
-                            exp = {"error": f"{type(exc).__name__}: {exc}"}
+                if exp.get("error"):
+                    answer = f"⚠️ {exp['error']}"
+                    exp_sources: list[dict] = []
+                    st.markdown(answer)
+                elif exp.get("experience_available"):
+                    # Domain query with relevant system experience — structured synthesis.
+                    answer = exp.get("synthesis", "")
+                    exp_sources = exp.get("experience_claims", [])
 
-                    if exp.get("error"):
-                        answer = f"⚠️ {exp['error']}"
-                        exp_sources: list[dict] = []
-                    else:
-                        answer = exp.get("synthesis", "")
-                        exp_sources = exp.get("experience_claims", [])
+                    c1, c2, c3 = st.columns(3)
+                    c1.metric("Confirmed", exp.get("confirmed_count", 0))
+                    c2.metric("Unverified", exp.get("unverified_count", 0))
+                    c3.metric("Disputed", exp.get("disputed_count", 0))
 
-                        # Show the structured breakdown before the synthesis.
-                        if not exp.get("experience_available"):
-                            st.info(
-                                "No system experience found yet — showing world knowledge only. "
-                                "Ingest transcripts to build up experience.",
-                                icon="ℹ️",
-                            )
-                        else:
-                            c1, c2, c3 = st.columns(3)
-                            c1.metric("Confirmed", exp.get("confirmed_count", 0))
-                            c2.metric("Unverified", exp.get("unverified_count", 0))
-                            c3.metric("Disputed", exp.get("disputed_count", 0))
+                    with st.expander("🌍 World knowledge baseline", expanded=False):
+                        st.markdown(exp.get("world_knowledge", ""))
 
-                        with st.expander("🌍 World knowledge baseline", expanded=False):
-                            st.markdown(exp.get("world_knowledge", ""))
+                    st.markdown("### 🧠 Discerned Position")
+                    st.markdown(answer)
+                    _render_copy_button(answer, key=f"live-{len(st.session_state.messages)}")
 
-                        st.markdown("### 🧠 Discerned Position")
-                        st.markdown(answer)
-
-                        if exp_sources:
-                            with st.expander(
-                                f"📎 Experience ({len(exp_sources)} claims)",
-                                expanded=True,
-                            ):
-                                for src in exp_sources:
+                    if exp_sources:
+                        direct = [s for s in exp_sources if s.get("context_type") == "direct"]
+                        connected = [s for s in exp_sources if s.get("context_type") != "direct"]
+                        with st.expander(f"📎 Experience ({len(direct)} direct · {len(connected)} graph connections)", expanded=False):
+                            if direct:
+                                st.caption("**Direct** — semantically matched to your query")
+                                for src in direct:
                                     status = src.get("epistemic_status") or src.get("status") or "Unknown"
                                     badge = {"Confirmed": "🟢", "Disputed": "🔴"}.get(status, "🟡")
                                     tags = src.get("tags") or []
                                     tag_str = f" `{'`, `'.join(tags)}`" if tags else ""
                                     sim = src.get("similarity") or src.get("score")
                                     sim_str = f" *(sim {sim:.3f})*" if sim is not None else ""
-                                    st.markdown(
-                                        f"{badge} **{status}**{tag_str}{sim_str}  \n{src.get('statement', '')}"
-                                    )
-
-                    st.session_state.messages.append(
-                        {"role": "assistant", "content": answer, "sources": exp_sources}
-                    )
-
-                # ── Research Chat (standard RAG) mode ────────────────────────
+                                    st.markdown(f"{badge} **{status}**{tag_str}{sim_str}  \n{src.get('statement', '')}")
+                            if connected:
+                                st.caption("**Graph connections** — reached via entity / shared slot traversal")
+                                for src in connected:
+                                    status = src.get("epistemic_status") or src.get("status") or "Unknown"
+                                    badge = {"Confirmed": "🟢", "Disputed": "🔴"}.get(status, "🟡")
+                                    tags = src.get("tags") or []
+                                    tag_str = f" `{'`, `'.join(tags)}`" if tags else ""
+                                    ctype = src.get("context_type", "graph")
+                                    slot = src.get("slot_name")
+                                    ctx_label = f"cross-slot `{slot}`" if ctype == "cross_slot" and slot else ctype.replace("_", " ")
+                                    st.markdown(f"🔗 **{status}**{tag_str} *({ctx_label})*  \n{src.get('statement', '')}")
                 else:
-                    sources: list[dict] = []
-                    context_lines: list[str] = []
-
-                    search_error: str | None = None
-                    with st.spinner("Searching knowledge base…"):
-                        try:
-                            result = engine.search_claims(
-                                prompt, domain=domain_filter, limit=6
-                            )
-                            if result.get("error"):
-                                search_error = result["error"]
-                            else:
-                                raw_hits = result.get("claims", result.get("matches", []))
-                                for h in raw_hits:
-                                    stmt = h.get("statement", "")
-                                    status = h.get("epistemic_status") or h.get("status") or "Unknown"
-                                    tags = h.get("tags") or []
-                                    sim = h.get("similarity") or h.get("score")
-                                    sources.append(
-                                        {
-                                            "statement": stmt,
-                                            "epistemic_status": status,
-                                            "tags": tags,
-                                            "similarity": round(float(sim), 3) if sim is not None else None,
-                                        }
-                                    )
-                                    tag_str = ", ".join(tags) if tags else "unknown domain"
-                                    context_lines.append(f"[{status}] {stmt}  (domain: {tag_str})")
-                        except Exception as exc:
-                            search_error = f"{type(exc).__name__}: {exc}"
-
-                    context_block = "\n".join(context_lines) if context_lines else "(no relevant claims found)"
-
-                    if search_error:
-                        st.warning(f"Knowledge base search failed: {search_error}", icon="⚠️")
-                    elif sources:
-                        st.caption(
-                            f"🔍 Retrieved **{len(sources)}** claim(s) from the knowledge base"
-                            + (f" (filtered to `{domain_filter}`)" if domain_filter else "")
-                            + " — grounding answer below."
-                        )
-                    else:
-                        st.caption(
-                            f"🔍 **0 claims retrieved** from the knowledge base"
-                            + (f" for domain `{domain_filter}`" if domain_filter else "")
-                            + " — answer will reflect that gap."
-                        )
-
-                    system_prompt = (
-                        "You are a research assistant with access to a curated, "
-                        "evidence-gated knowledge base built from expert transcripts.\n\n"
-                        "Rules:\n"
-                        "1. Ground your answer in the knowledge base context provided below.\n"
-                        "2. For each point you make, indicate whether it is Confirmed "
-                        "   (evidence-backed) or Unverified (observed but not yet proven).\n"
-                        "3. If the knowledge base has no relevant information on a point, "
-                        "   say so explicitly — do not fabricate or extrapolate.\n"
-                        "4. Preserve dissent: if the knowledge base contains conflicting "
-                        "   positions, present both and note the disagreement.\n"
-                        "5. For TCM and financial topics, always attribute claims to their "
-                        "   source — never present synthesised knowledge as anonymous fact.\n"
-                        "6. Unknown is valid — if a question cannot be answered from the "
-                        "   knowledge base, say the answer is currently unknown."
-                    )
-
-                    user_prompt = (
-                        f"Question: {prompt}\n\n"
-                        f"Knowledge base context ({len(sources)} claim(s) retrieved):\n"
-                        f"{context_block}"
-                    )
-
-                    with st.spinner("Asking MiMo…"):
-                        try:
-                            answer = mimo.complete_sync(
-                                system=system_prompt,
-                                user=user_prompt,
-                                max_tokens=2000,
-                            )
-                        except Exception as exc:
-                            answer = f"⚠️ LLM call failed: {type(exc).__name__}: {exc}"
-                            sources = []
-
+                    # Conversational or off-topic — plain world knowledge reply, no KB structure.
+                    answer = exp.get("world_knowledge", exp.get("synthesis", ""))
+                    exp_sources = []
                     st.markdown(answer)
+                    _render_copy_button(answer, key=f"live-{len(st.session_state.messages)}")
 
-                    if sources:
-                        with st.expander(
-                            f"📎 Sources ({len(sources)} claims from knowledge base)",
-                            expanded=True,
-                        ):
-                            for src in sources:
-                                badge = (
-                                    "🟢"
-                                    if src.get("epistemic_status") == "Confirmed"
-                                    else ("🔴" if src.get("epistemic_status") == "Disputed" else "🟡")
-                                )
-                                tags = src.get("tags") or []
-                                tag_str = f" `{'`, `'.join(tags)}`" if tags else ""
-                                sim = src.get("similarity")
-                                sim_str = f" *(sim {sim:.3f})*" if sim is not None else ""
-                                st.markdown(
-                                    f"{badge} **{src['epistemic_status']}**"
-                                    f"{tag_str}{sim_str}  \n{src['statement']}"
-                                )
-
-                    st.session_state.messages.append(
-                        {"role": "assistant", "content": answer, "sources": sources}
-                    )
+                st.caption(f"⏱ {_chat_elapsed:.1f}s")
+                st.session_state.messages.append(
+                    {"role": "assistant", "content": answer, "sources": exp_sources, "elapsed": _chat_elapsed}
+                )
 
     if st.session_state.get("messages"):
         st.divider()
         if st.button("🗑 Clear chat history"):
             st.session_state.messages = []
+            st.session_state.show_older_messages = False
             st.rerun()
 
 

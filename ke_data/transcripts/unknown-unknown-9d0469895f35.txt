@@ -1,0 +1,21 @@
+[QA TRANSCRIPT 11]
+Title: Ambiguous and Malformed Transcript
+Domain: unknown_or_ambiguous
+Purpose: Tests gap detection, malformed input tolerance, and refusal to over-extract.
+
+Moderator: The following notes are incomplete and intentionally messy.
+
+Speaker ?: It worked better than that after the change.
+
+Speaker ?: The result improved, but the old thing was still useful.
+
+[missing speaker]
+[missing date]
+[missing domain]
+The method should be used when conditions are right.
+
+Reviewer A: This transcript should not produce strong canonical claims. The terms "it," "that," "the change," "result," and "conditions" are undefined.
+
+Reviewer B: The correct output is a gap list: unknown domain, unknown method, unknown baseline, unknown metric, unknown timeframe, unknown source credibility.
+
+Summary Note: Expected behavior: extract little or nothing as confirmed knowledge. Ask clarification rather than inventing the missing context.

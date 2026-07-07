@@ -29,43 +29,45 @@ agent can then use that knowledge as working experience for later R&D tasks.
 
 ## Quick Start
 
+### Prerequisites
+
+1. **Python 3.11+** (verified with 3.14)
+2. **Neo4j 5.13+** — Community Server (no Docker required). See [wiki/Setup-Neo4j.md](wiki/Setup-Neo4j.md).
+3. **Ollama** — for local embeddings. Install from <https://ollama.com/download>, then `ollama pull bge-m3`.
+4. **MiMo API key** — for LLM claim extraction. Set `KE_MIMO_API_KEY` in `.env`.
+
+### Setup
+
 ```powershell
-# From the repo root
-python -m pytest                     # unit tests, no external services needed
+cd knowledge_engine
+pip install -e .
+pip install ".[ui]"
+Copy-Item .env.example .env    # then edit with your settings
 
-# Optional: stand up the graph engine, then run the gated integration tests.
-# Docker needs hardware virtualization; if blocked, use Neo4j Community Server
-# (no Docker) — see wiki/Setup-Neo4j.md (Option A).
-docker compose up -d
-$env:KE_NEO4J_URI = "bolt://localhost:7687"
-$env:KE_NEO4J_USER = "neo4j"
-$env:KE_NEO4J_PASSWORD = "knowledge-engine"
-$env:KE_NEO4J_DATABASE = "neo4j"
-python -m pytest tests/test_graph_neo4j.py
+# Start Neo4j (see wiki/Setup-Neo4j.md)
+Set-Item Env:JAVA_HOME "C:\Program Files\Android\Android Studio\jbr"
+cd path\to\neo4j-community-2026.05.0
+bin\neo4j-admin.bat dbms set-initial-password knowledge-engine
+bin\neo4j.bat console
 
-python server.py                     # MCP server (for VS Code Copilot)
+# Start Ollama (another terminal)
+ollama serve
 ```
 
-Copy `.env.example` to `.env` and fill in the Neo4j, embedding, and LLM settings. Required backends
-must be configured — the engine does not run in a degraded mode.
+### Run
+
+```powershell
+python -m pytest                  # unit tests (no Neo4j needed)
+streamlit run app.py             # UI at http://localhost:8501
+python server.py                 # MCP server
+```
 
 ### Try it now (local UI)
 
-The fastest way to use the system interactively is the Streamlit app:
-
-```powershell
-# Install the UI extra (Streamlit):
-pip install ".[ui]"
-
-# Start Neo4j + Ollama bge-m3 first, then:
-cd knowledge_engine
-streamlit run app.py
-```
-
-The app opens at `http://localhost:8503` with three tabs:
-- **Ingest** — paste a transcript or upload one or more `.txt` files (max 5 MB each). No metadata entry required — the system classifies domain and entity name automatically from the transcript content.
-- **Chat** — two modes selectable via radio: **Research Chat** (RAG grounded in evidence-gated claims, source evidence shown open by default) and **Explore Experience** (world knowledge from the LLM discerned through system experience — `[WORLD VIEW]` → `[EXPERIENCE]` → `[DISCERNED POSITION]`).
-- **Knowledge Base** — live snapshot, **pending slot promotions** queue (review and confirm lifecycle advances), open-conflict resolution panel (enter decision + rationale to close a case), domain browser (full epistemic view: Confirmed + Unverified + Disputed), entity lookup, and cross-domain pattern finder.
+The Streamlit app has three tabs:
+- **Ingest** — paste a transcript or upload `.txt` files. Domain and entity name are auto-classified from content.
+- **Chat** — intent-driven unified chat: conversational messages get a plain reply; domain questions trigger full synthesis (`[WORLD VIEW]` → `[EXPERIENCE]` → `[DISCERNED POSITION]`) grounded in evidence-gated claims.
+- **Knowledge Base** — live snapshot, pending slot promotions queue, open-conflict resolution panel, domain browser (Confirmed + Unverified + Disputed), entity lookup, and cross-domain pattern finder.
 
 ### Try it now (CLI / UAT)
 

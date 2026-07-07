@@ -1,0 +1,1 @@
+[Expert A (diversification)] Risk-adjusted returns (Sharpe ratio) improve when portfolio correlation is below 0.3 across asset classes.

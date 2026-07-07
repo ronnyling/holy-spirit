@@ -48,6 +48,9 @@ REL_OF = "OF"
 CLAIM_VECTOR_INDEX = "claim_embedding_index"
 _ALLOWED_SIMILARITY = ("cosine", "euclidean")
 
+# --- Full-text index -----------------------------------------------------------
+FULLTEXT_CLAIM_INDEX = "claim_statement_fulltext"
+
 
 UNIQUENESS_CONSTRAINTS: tuple[str, ...] = (
     f"CREATE CONSTRAINT entity_id IF NOT EXISTS "
@@ -97,12 +100,25 @@ def vector_index_cypher(
     )
 
 
+def fulltext_index_cypher(name: str = FULLTEXT_CLAIM_INDEX) -> str:
+    """Return the DDL for a full-text index on claim statements and tags.
+
+    Uses Lucene's standard analyzer for tokenized keyword search. Complements
+    the vector index for lexical/terminology matches that embeddings may miss.
+    """
+    return (
+        f"CREATE FULLTEXT INDEX {name} IF NOT EXISTS "
+        f"FOR (n:{NODE_CLAIM}) ON EACH [n.statement, n.tags]"
+    )
+
+
 def schema_statements(*, dimensions: int, similarity: str = "cosine") -> list[str]:
-    """All DDL needed to initialise a fresh graph: constraints + vector index."""
+    """All DDL needed to initialise a fresh graph: constraints + vector + fulltext indexes."""
 
     return [
         *UNIQUENESS_CONSTRAINTS,
         vector_index_cypher(dimensions=dimensions, similarity=similarity),
+        fulltext_index_cypher(),
     ]
 
 
