@@ -1,4 +1,4 @@
-from unittest.mock import Mock, patch
+from unittest.mock import Mock
 
 from knowledge_engine.logical_gaps import LogicalGapDetector
 from knowledge_engine.models import Claim, Evidence, EpistemicStatus
@@ -70,9 +70,7 @@ def test_detects_unstated_assumptions():
     evidence = Evidence(id="e1", claim_id="c1", source_kind="user", source_id="user1", credibility=0.5)
 
     # Mock LLM response
-    detector.llm_client.chat.return_value = Mock(
-        choices=[Mock(message=Mock(content='{"assumptions": ["dividend yield is a reliable safety indicator", "past yield predicts future safety"]}'))]
-    )
+    detector.llm_client.complete_sync.return_value = '{"assumptions": ["dividend yield is a reliable safety indicator", "past yield predicts future safety"]}'
 
     gaps = detector.detect([claim], [evidence])
 

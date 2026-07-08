@@ -1,13 +1,28 @@
 from __future__ import annotations
 
+import json
+import logging
+from typing import Protocol
+
 from .contracts import GapFlag, GapKind
 from .models import Claim, Evidence
+
+logger = logging.getLogger(__name__)
+
+# Threshold: claims with more evidence than this skip unstated-assumption check
+_MIN_EVIDENCE_FOR_UNSTATED = 2
+# Maximum number of assumptions to report per claim
+_MAX_ASSUMPTIONS = 3
+
+
+class SupportsComplete(Protocol):
+    def complete_sync(self, *, system: str, user: str, max_tokens: int = 8_000) -> str: ...
 
 
 class LogicalGapDetector:
     """Detect logical weaknesses in reasoning, not just missing evidence."""
 
-    def __init__(self, llm_client=None):
+    def __init__(self, llm_client: SupportsComplete | None = None):
         self.llm_client = llm_client
 
     def detect(self, claims: list[Claim], evidence: list[Evidence]) -> list[GapFlag]:
@@ -144,23 +159,21 @@ class LogicalGapDetector:
 
         for claim in claims:
             # Only check claims with minimal evidence
-            if evidence_count.get(claim.id, 0) > 2:
+            if evidence_count.get(claim.id, 0) > _MIN_EVIDENCE_FOR_UNSTATED:
                 continue
 
-            prompt = f"""Analyze this claim for unstated assumptions. Return JSON with key "assumptions" containing a list of implicit assumptions.
-
-Claim: {claim.statement}
-
-Return only valid JSON: {{"assumptions": ["assumption1", "assumption2"]}}"""
+            system = (
+                "Analyze the user's claim for unstated assumptions. "
+                "Return JSON with key \"assumptions\" containing a list of implicit assumptions. "
+                "Return only valid JSON: {\"assumptions\": [\"assumption1\", \"assumption2\"]}"
+            )
 
             try:
-                response = self.llm_client.chat(prompt)
-                content = response.choices[0].message.content
-                import json
-                data = json.loads(content)
+                response = self.llm_client.complete_sync(system=system, user=claim.statement)
+                data = json.loads(response)
                 assumptions = data.get("assumptions", [])
 
-                for assumption in assumptions[:3]:  # Cap at 3
+                for assumption in assumptions[:_MAX_ASSUMPTIONS]:
                     gaps.append(GapFlag(
                         kind=GapKind.LOGICAL,
                         entity_id=claim.entity_id,
@@ -169,8 +182,7 @@ Return only valid JSON: {{"assumptions": ["assumption1", "assumption2"]}}"""
                         severity="high",
                         rationale=f"Unstated assumption: {assumption}"
                     ))
-            except Exception:
-                # LLM failure is non-breaking
-                pass
+            except Exception as exc:
+                logger.warning("LLM unstated-assumption check failed for claim %s: %s", claim.id, exc)
 
         return gaps
