@@ -9,6 +9,7 @@ from pydantic import BaseModel, ConfigDict, Field
 class GapKind(StrEnum):
     STRUCTURAL = "structural"
     SEMANTIC = "semantic"
+    LOGICAL = "logical"
 
 
 class EvidenceDraft(BaseModel):
