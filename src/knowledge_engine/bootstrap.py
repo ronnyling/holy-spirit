@@ -19,6 +19,7 @@ from .llm import MiMoClient
 from .query_processor import QueryProcessor
 from .registry import TranscriptRegistry
 from .reranker import RerankerClient
+from .service_manager import ServiceManager, ServiceStatus
 
 
 def load_dotenv(path: str | os.PathLike[str] = ".env") -> bool:
@@ -42,14 +43,32 @@ def load_dotenv(path: str | os.PathLike[str] = ".env") -> bool:
     return True
 
 
-def build_engine_from_env(*, dotenv_path: str | os.PathLike[str] = ".env") -> KnowledgeEngine:
+def build_engine_from_env(
+    *,
+    dotenv_path: str | os.PathLike[str] = ".env",
+    auto_start: bool = True,
+) -> KnowledgeEngine:
     """Construct the engine from env vars. Neo4j is required; the rest optional.
 
     - Neo4j missing        -> SystemExit(1) (no in-memory fallback).
     - Embeddings key absent -> vector search tools disabled (warned).
     - MiMo key absent       -> LLM extraction disabled; manual claim_drafts only.
+
+    Args:
+        dotenv_path: Path to .env file
+        auto_start: If True, auto-start Neo4j and Ollama if not running
     """
     load_dotenv(dotenv_path)
+
+    # Auto-start services if requested
+    if auto_start:
+        manager = ServiceManager()
+        results = manager.ensure_all_services()
+        for name, result in results.items():
+            if result.status == ServiceStatus.ERROR:
+                print(f"WARNING: {name} failed to start: {result.message}", file=sys.stderr)
+            elif result.status == ServiceStatus.RUNNING:
+                print(f"  ✓ {name}: {result.message}")
 
     neo4j_uri = os.environ.get("KE_NEO4J_URI", "")
     neo4j_user = os.environ.get("KE_NEO4J_USER", "")
