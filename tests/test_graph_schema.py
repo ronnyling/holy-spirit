@@ -26,9 +26,10 @@ def test_vector_index_cypher_rejects_unknown_similarity() -> None:
 
 def test_schema_statements_include_all_constraints_and_index() -> None:
     statements = schema.schema_statements(dimensions=8)
-    # one vector index + every uniqueness constraint
-    assert len(statements) == len(schema.UNIQUENESS_CONSTRAINTS) + 1
+    # vector index + fulltext index + every uniqueness constraint
+    assert len(statements) == len(schema.UNIQUENESS_CONSTRAINTS) + 2
     assert any("CREATE VECTOR INDEX" in s for s in statements)
+    assert any("CREATE FULLTEXT INDEX" in s for s in statements)
     assert all("IF NOT EXISTS" in s for s in statements)
 
 
