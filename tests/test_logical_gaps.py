@@ -41,3 +41,20 @@ def test_detects_cherry_picking():
     cherry_gaps = [g for g in gaps if "cherry" in g.rationale.lower()]
     assert len(cherry_gaps) == 1
     assert cherry_gaps[0].severity == "medium"
+
+
+def test_detects_over_generalization():
+    detector = LogicalGapDetector()
+
+    # Universal claim with limited evidence
+    claim = Claim(id="c1", entity_id="e1", statement="All stocks follow momentum patterns", epistemic_status=EpistemicStatus.CONFIRMED)
+
+    # Only 2 evidence items for a universal claim
+    evidence1 = Evidence(id="e1", claim_id="c1", source_kind="external_doc", source_id="doc1", credibility=0.7)
+    evidence2 = Evidence(id="e2", claim_id="c1", source_kind="external_doc", source_id="doc2", credibility=0.7)
+
+    gaps = detector.detect([claim], [evidence1, evidence2])
+
+    overgen_gaps = [g for g in gaps if "over-generalization" in g.rationale.lower()]
+    assert len(overgen_gaps) == 1
+    assert overgen_gaps[0].severity == "medium"
