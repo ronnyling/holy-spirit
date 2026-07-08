@@ -12,12 +12,15 @@ agent can then use that knowledge as working experience for later R&D tasks.
 
 - **Evidence, not truth** — every claim carries provenance and epistemic status; nothing is canonical without evidence.
 - **Gaps before conflicts** — missing data is flagged for clarification before conflict checks run.
+- **Logical gap detection** — circular reasoning, cherry-picking, over-generalization, and unstated assumptions detected automatically.
 - **Consensus with preserved dissent** — never forces a single winner where the domain doesn't support one.
 - **Graph-first on Neo4j 5** — one engine for the property graph *and* native vector search; no split-brain, no runtime fallbacks.
 - **Bounded vs unbounded discipline** — deterministic work stays in code; only genuinely semantic work goes to the LLM.
 - **User is a source, not an oracle** — user input enters as `Unverified` and must earn confirmation.
 - **Slot promotion queue** — threshold crossings during ingest write to a persistent queue; the user reviews and confirms at their own pace, never blocking ingestion.
 - **Experience synthesis** — `explore_experience` combines LLM world knowledge with system-accumulated claims to produce a grounded, opinionated view: world baseline → experience adds/corrects → discerned position.
+- **Intent-aware input** — classifies user intent (evidence, dispute, correction, exploration, learning) via Ollama embeddings for zero-cost routing.
+- **Auto-start services** — Neo4j and Ollama auto-start on engine initialization with port conflict resolution.
 
 ## Contents
 
@@ -44,7 +47,8 @@ pip install -e .
 pip install ".[ui]"
 Copy-Item .env.example .env    # then edit with your settings
 
-# Start Neo4j (see wiki/Setup-Neo4j.md)
+# Services auto-start on first run (Neo4j + Ollama)
+# Or manually start if needed:
 Set-Item Env:JAVA_HOME "C:\Program Files\Android\Android Studio\jbr"
 cd path\to\neo4j-community-2026.05.0
 bin\neo4j-admin.bat dbms set-initial-password knowledge-engine
@@ -182,6 +186,7 @@ goes to the LLM. This boundary must not be crossed casually.
 | Transcript chunking + documentation + housekeeping | Deterministic code | Structure-aware slicing and hashing |
 | Structural gap check (expected slot missing) | Deterministic code | It is a schema-presence check |
 | Logical gap detection (circular reasoning, cherry-picking, over-generalization) | Deterministic code | Graph analysis and heuristics over existing claims/evidence |
+| Intent classification | Deterministic code (Ollama embeddings) | Embedding similarity matching, zero-cost |
 | Slot counting and threshold detection | Deterministic code | Pure statistics |
 | Evidence scoring | Deterministic code | Arithmetic over credibility |
 | Cycle detection | Deterministic code (native Cypher) | Graph reachability over `SUPPORTS` edges |
@@ -190,6 +195,7 @@ goes to the LLM. This boundary must not be crossed casually.
 | Semantic gap detection | LLM | Requires meaning, not presence |
 | Claim reconciliation and terminology mapping | LLM | Same concept, different words |
 | Conflict interpretation and resolution proposal | LLM | Requires judgment |
+| Experience synthesis | LLM | Integrates world knowledge with accumulated claims |
 
 ## Knowledge Rules
 
@@ -263,6 +269,7 @@ the sum of evidence credibility (0-1 each). Source kind still governs trust and 
 - Semantic gaps are heuristic / LLM-backed: unclear context, missing rationale, missing conditions.
 - Gap checking runs before conflict checking.
 - The engine should ask for missing data immediately so you can clarify on the spot.
+- Intent classification uses Ollama embeddings (zero-cost) to route user inputs appropriately.
 
 ### Conflict Rules
 
@@ -273,18 +280,20 @@ the sum of evidence credibility (0-1 each). Source kind still governs trust and 
 
 ## Processing Pipeline
 
-1. Ingest transcript.
-2. Harbour it: normalize, hash, chunk, auto-document, register (idempotent housekeeping). Identical content under any file name **short-circuits the rest of the pipeline** — no re-extraction, no re-embedding.
-3. Extract claims.
-4. Observe slots and learn frequencies.
-5. Run structural and semantic gap checks (gap check runs **before** conflict check).
-6. If gaps exist, flag them immediately.
-7. Run conflict detection against canonical knowledge.
-8. Open or reuse a resolution case if needed.
-9. Embed new claims (on-demand model, warmed then released; batched and `num_ctx`-bounded).
-10. Research with the user to gather evidence.
-11. Promote to canonical only when evidence gates are satisfied.
-12. Keep the evidence chain and resolution history.
+1. Classify user intent via Ollama embeddings (evidence, dispute, correction, exploration, learning, chat).
+2. Route to appropriate handler based on intent.
+3. Ingest transcript.
+4. Harbour it: normalize, hash, chunk, auto-document, register (idempotent housekeeping). Identical content under any file name **short-circuits the rest of the pipeline** — no re-extraction, no re-embedding.
+5. Extract claims.
+6. Observe slots and learn frequencies.
+7. Run structural, logical, and semantic gap checks (gap check runs **before** conflict check).
+8. If gaps exist, flag them immediately.
+9. Run conflict detection against canonical knowledge.
+10. Open or reuse a resolution case if needed.
+11. Embed new claims (on-demand model, warmed then released; batched and `num_ctx`-bounded).
+12. Research with the user to gather evidence.
+13. Promote to canonical only when evidence gates are satisfied.
+14. Keep the evidence chain and resolution history.
 
 ## Domain Behavior
 
@@ -327,11 +336,13 @@ but not yet built.
 - Slot observation and threshold-based promotion suggestions, with human-gated confirmation
 - Structural gap detection that runs before conflict detection
 - Logical gap detection (`LogicalGapDetector`): circular reasoning, cherry-picking, over-generalization, and unstated-assumption checks — runs as part of the gap-check phase alongside structural and semantic gaps
+- Intent classification (`IntentClassifier`): embedding-based intent detection via Ollama (zero-cost) — classifies user input as evidence, dispute, correction, exploration, learning, or chat
+- Service management (`ServiceManager`): auto-start Neo4j and Ollama on engine initialization with port conflict resolution
 - Same-aspect (entity + slot) conflict detection
 - Resolution-case creation and reopening from similar prior cases
 - Per-domain evidence gates and evidence scoring
 - Graph schema (`graph/schema.py`): Cypher constraints + native vector index DDL + cycle-probe query (unit-tested)
-- `graph/neo4j_store.py`: real Neo4j-driver store — full read/write interface (node/edge upserts for all entity types, native vector search, Cypher-native cycle detection, domain listing, cross-domain pattern discovery). **Verified against Neo4j Community 2026.05.0** — full suite `python -m pytest -q` reports **87 passed** (Neo4j integration tests run when a database is reachable, otherwise skipped). See [wiki/Setup-Neo4j.md](wiki/Setup-Neo4j.md).
+- `graph/neo4j_store.py`: real Neo4j-driver store — full read/write interface (node/edge upserts for all entity types, native vector search, Cypher-native cycle detection, domain listing, cross-domain pattern discovery). **Verified against Neo4j Community 2026.05.0** — full suite `python -m pytest -q` reports **198 passed** (Neo4j integration tests run when a database is reachable, otherwise skipped). See [wiki/Setup-Neo4j.md](wiki/Setup-Neo4j.md).
 - `embeddings.py`: embedding transport with two backends — local **Ollama-native** (`/api/embed`, default `bge-m3`, 1024-dim) and OpenAI-compatible (`/v1/embeddings`) — on async httpx + tenacity retry (exponential backoff on 429/503). Embedding is treated as **housekeeping**: the model is loaded on demand for a batch (`warm()`, `keep_alive=5m`) and released immediately afterwards (`unload_sync()`, `keep_alive=0`), so an idle engine holds no model in memory. Input is **batched** (`batch_size`, default 64) and **context-bounded** (`num_ctx`, default 1024) per request. Optional at server startup — when embedding env vars are absent, vector search tools return a clear error; all other tools still work.
 - `llm.py` + `extraction.py`: MiMo (OpenAI-compatible) chat client and LLM-backed claim extraction. **Verified live against the MiMo gateway** (`https://api.xiaomimimo.com/v1`, `mimo-v2.5`, `tp-` token-plan key — chat returns 200). When `KE_MIMO_API_KEY` is set and a transcript arrives with no hand-authored claims, claims are extracted from the raw text. Extraction is the **unbounded** layer; parsing/validation is deterministic and **never fabricates evidence**, so extracted claims enter as `Unverified`. Optional and non-breaking (unit-tested with a stubbed client).
 - `scripts/ke.py`: command-line interface for ingest + query. When `KE_NEO4J_URI` is set, Neo4j is the primary store and all ingest writes go directly to the graph; otherwise falls back to the file-backed JSON store. See [docs/UAT-Usage-Guide.md](docs/UAT-Usage-Guide.md).
@@ -386,13 +397,16 @@ It also exposes a `knowledge://state` resource with a JSON snapshot of the curre
 ## Project Layout
 
 - `src/knowledge_engine/` - runtime package (engine, models, chunking, documentation, registry, gaps, conflicts, evidence, resolution, policy, classification, embeddings)
+- `src/knowledge_engine/intent_classifier.py` - embedding-based intent classification via Ollama (zero-cost)
+- `src/knowledge_engine/logical_gaps.py` - logical gap detection (circular reasoning, cherry-picking, over-generalization, unstated assumptions)
+- `src/knowledge_engine/service_manager.py` - service lifecycle management (Neo4j, Ollama auto-start)
 - `src/knowledge_engine/evidence_hunter.py` - automated web-evidence sourcing for Unverified claims (pluggable `SearchProvider`, Tavily default, domain credibility ceilings)
 - `src/knowledge_engine/graph/` - Neo4j graph layer (`schema.py` pure DDL, `neo4j_store.py` full read/write driver store with vector search, domain listing, cross-domain patterns, and open-case listing)
 - `app.py` - Streamlit local UI (ingest with paste/upload modes + session history, RAG chat, KB browser + conflict resolution panel); install with `pip install ".[ui]"`
 - `src/knowledge_engine/embeddings.py` - embedding client: Ollama-native (`/api/embed`) + OpenAI-compatible transport, on-demand model lifecycle (`warm()`/`unload_sync()`), batching + `num_ctx` (async httpx + tenacity retry)
 - `src/knowledge_engine/llm.py` - MiMo (OpenAI-compatible) chat client (async httpx + tenacity retry)
 - `src/knowledge_engine/extraction.py` - LLM-backed claim extraction (unbounded LLM + deterministic parsing)
-- `src/knowledge_engine/bootstrap.py` - shared engine bootstrap + `.env` loader (used by server and CLI)
+- `src/knowledge_engine/bootstrap.py` - shared engine bootstrap + `.env` loader with auto-start (used by server and CLI)
 - `scripts/ke.py` - command-line interface (ingest + ask) for UAT on the file-backed store
 - `docs/UAT-Usage-Guide.md` - step-by-step guide: setup, transcript folder layout, ingest, query, limitations
 - `tests/` - unit tests, graph schema tests, gated Neo4j integration tests, extraction + persistence tests, and beta scenarios

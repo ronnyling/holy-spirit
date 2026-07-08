@@ -15,6 +15,7 @@ from .evidence import EvidenceLedger
 from .extraction import ClaimExtractor, SupportsComplete
 from .gaps import GapDetector
 from .graph.neo4j_store import KnowledgeGraphStore
+from .intent_classifier import IntentClassifier, IntentResult
 from .learning import SlotLearner
 from .models import Claim, EpistemicStatus, Provenance, SlotLifecycle
 from .policy import get_domain_policy
@@ -139,6 +140,7 @@ class KnowledgeEngine:
         self.conflict_detector = ConflictDetector()
         self.resolution_memory = ResolutionMemory(self.store)
         self.evidence_ledger = EvidenceLedger()
+        self.intent_classifier = IntentClassifier(embedding_client) if embedding_client else None
         # When a registry is wired (production / e2e path), every ingested transcript
         # is harboured, documented, and housekept before any claim processing.
         self.registry = registry
@@ -770,6 +772,52 @@ class KnowledgeEngine:
             pass
 
         return {"actions": actions, "timestamp": datetime.now(timezone.utc).isoformat()}
+
+    def classify_intent(self, text: str) -> dict[str, Any]:
+        """Classify user intent from text using Ollama embeddings.
+
+        Returns:
+            Dict with intent, confidence, sub_mode, secondary_intents, topics, sentiment
+        """
+        if self.intent_classifier is None:
+            return {"intent": "unknown", "confidence": 0.0, "error": "IntentClassifier not configured"}
+
+        result = self.intent_classifier.classify(text)
+        return {
+            "intent": result.intent,
+            "confidence": result.confidence,
+            "sub_mode": result.sub_mode,
+            "secondary_intents": result.secondary_intents,
+            "topics": result.topics,
+            "sentiment": result.sentiment,
+        }
+
+    def process_user_input(self, text: str, source: str = "user") -> dict[str, Any]:
+        """Process user input with intent-aware routing.
+
+        Classifies intent and routes to appropriate handler:
+        - chat: conversational response
+        - evidence: ingest as evidence
+        - dispute: open resolution case
+        - correction: reassess existing claim
+        - exploration: query knowledge base
+        - learning: ingest as transcript
+        """
+        intent_result = self.classify_intent(text)
+        intent = intent_result.get("intent", "chat")
+
+        if intent == "evidence":
+            return {"action": "evidence", "text": text, "source": source}
+        elif intent == "dispute":
+            return {"action": "dispute", "text": text, "source": source}
+        elif intent == "correction":
+            return {"action": "correction", "text": text, "source": source}
+        elif intent == "exploration":
+            return self.explore_experience(text)
+        elif intent == "learning":
+            return {"action": "learning", "text": text, "source": source}
+        else:  # chat
+            return {"action": "chat", "text": text, "intent": intent_result}
 
     def explore_experience(self, query: str, domain: str | None = None, verbosity: str = "warn") -> dict[str, Any]:
         """Synthesize world knowledge discerned through accumulated system experience.
