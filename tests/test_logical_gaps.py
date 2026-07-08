@@ -24,3 +24,20 @@ def test_detects_circular_reasoning():
     circular_gaps = [g for g in gaps if "circular" in g.rationale.lower()]
     assert len(circular_gaps) == 1
     assert circular_gaps[0].severity == "high"
+
+
+def test_detects_cherry_picking():
+    detector = LogicalGapDetector()
+
+    # Claim supported only by high-credibility evidence (ignoring low-cred)
+    claim = Claim(id="c1", entity_id="e1", statement="Strategy X works", epistemic_status=EpistemicStatus.CONFIRMED)
+
+    # Only linked to high-cred evidence
+    evidence_high = Evidence(id="eh", claim_id="c1", source_kind="external_doc", source_id="doc1", credibility=0.9, linked_claim_ids=[])
+    evidence_low = Evidence(id="el", claim_id="c1", source_kind="external_doc", source_id="doc2", credibility=0.2, linked_claim_ids=[])
+
+    gaps = detector.detect([claim], [evidence_high, evidence_low])
+
+    cherry_gaps = [g for g in gaps if "cherry" in g.rationale.lower()]
+    assert len(cherry_gaps) == 1
+    assert cherry_gaps[0].severity == "medium"
