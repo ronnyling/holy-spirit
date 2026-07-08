@@ -1,3 +1,5 @@
+from unittest.mock import Mock, patch
+
 from knowledge_engine.logical_gaps import LogicalGapDetector
 from knowledge_engine.models import Claim, Evidence, EpistemicStatus
 
@@ -58,3 +60,22 @@ def test_detects_over_generalization():
     overgen_gaps = [g for g in gaps if "over-generalization" in g.rationale.lower()]
     assert len(overgen_gaps) == 1
     assert overgen_gaps[0].severity == "medium"
+
+
+def test_detects_unstated_assumptions():
+    detector = LogicalGapDetector(llm_client=Mock())
+
+    # Claim with implicit assumption
+    claim = Claim(id="c1", entity_id="e1", statement="High dividend yield means the stock is safe", epistemic_status=EpistemicStatus.CONFIRMED)
+    evidence = Evidence(id="e1", claim_id="c1", source_kind="user", source_id="user1", credibility=0.5)
+
+    # Mock LLM response
+    detector.llm_client.chat.return_value = Mock(
+        choices=[Mock(message=Mock(content='{"assumptions": ["dividend yield is a reliable safety indicator", "past yield predicts future safety"]}'))]
+    )
+
+    gaps = detector.detect([claim], [evidence])
+
+    assumption_gaps = [g for g in gaps if "assumption" in g.rationale.lower()]
+    assert len(assumption_gaps) >= 1
+    assert assumption_gaps[0].severity == "high"

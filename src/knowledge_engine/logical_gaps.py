@@ -7,12 +7,16 @@ from .models import Claim, Evidence
 class LogicalGapDetector:
     """Detect logical weaknesses in reasoning, not just missing evidence."""
 
+    def __init__(self, llm_client=None):
+        self.llm_client = llm_client
+
     def detect(self, claims: list[Claim], evidence: list[Evidence]) -> list[GapFlag]:
         """Analyze claims and evidence for logical fallacies."""
         gaps = []
         gaps.extend(self._detect_circular_reasoning(claims, evidence))
         gaps.extend(self._detect_cherry_picking(claims, evidence))
         gaps.extend(self._detect_over_generalization(claims, evidence))
+        gaps.extend(self._detect_unstated_assumptions(claims, evidence))
         return gaps
 
     def _detect_circular_reasoning(self, claims: list[Claim], evidence: list[Evidence]) -> list[GapFlag]:
@@ -124,5 +128,49 @@ class LogicalGapDetector:
                         severity="medium",
                         rationale=f"Over-generalization: universal claim '{claim.statement[:50]}...' supported by only {count} evidence items (threshold: {min_evidence_for_universal})"
                     ))
+
+        return gaps
+
+    def _detect_unstated_assumptions(self, claims: list[Claim], evidence: list[Evidence]) -> list[GapFlag]:
+        """Use LLM to detect implicit assumptions not backed by evidence."""
+        gaps = []
+
+        if self.llm_client is None:
+            return gaps
+
+        evidence_count: dict[str, int] = {}
+        for ev in evidence:
+            evidence_count[ev.claim_id] = evidence_count.get(ev.claim_id, 0) + 1
+
+        for claim in claims:
+            # Only check claims with minimal evidence
+            if evidence_count.get(claim.id, 0) > 2:
+                continue
+
+            prompt = f"""Analyze this claim for unstated assumptions. Return JSON with key "assumptions" containing a list of implicit assumptions.
+
+Claim: {claim.statement}
+
+Return only valid JSON: {{"assumptions": ["assumption1", "assumption2"]}}"""
+
+            try:
+                response = self.llm_client.chat(prompt)
+                content = response.choices[0].message.content
+                import json
+                data = json.loads(content)
+                assumptions = data.get("assumptions", [])
+
+                for assumption in assumptions[:3]:  # Cap at 3
+                    gaps.append(GapFlag(
+                        kind=GapKind.LOGICAL,
+                        entity_id=claim.entity_id,
+                        slot_name=claim.slot_name or "general",
+                        question=f"Is this assumption validated? '{assumption}'",
+                        severity="high",
+                        rationale=f"Unstated assumption: {assumption}"
+                    ))
+            except Exception:
+                # LLM failure is non-breaking
+                pass
 
         return gaps
