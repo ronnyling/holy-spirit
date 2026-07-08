@@ -77,3 +77,15 @@ def test_detects_unstated_assumptions():
     assumption_gaps = [g for g in gaps if "assumption" in g.rationale.lower()]
     assert len(assumption_gaps) >= 1
     assert assumption_gaps[0].severity == "high"
+
+
+def test_gap_detector_logical_gaps_integration():
+    from knowledge_engine.gaps import GapDetector
+
+    detector = GapDetector()
+
+    claim = Claim(id="c1", entity_id="e1", statement="All stocks follow momentum", epistemic_status=EpistemicStatus.CONFIRMED)
+    evidence = Evidence(id="e1", claim_id="c1", source_kind="external_doc", source_id="doc1", credibility=0.7)
+
+    gaps = detector.logical_gaps([claim], [evidence])
+    assert isinstance(gaps, list)

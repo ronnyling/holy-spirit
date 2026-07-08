@@ -1,11 +1,16 @@
 from __future__ import annotations
 
 from .contracts import GapFlag, GapKind, ClaimDraft, TranscriptInput
-from .models import Slot
+from .logical_gaps import LogicalGapDetector
+from .models import Claim, Evidence, Slot
 from .utils import needs_context
 
 
 class GapDetector:
+    def __init__(self, llm_client=None):
+        self.llm_client = llm_client
+        self.logical_detector = LogicalGapDetector(llm_client=llm_client)
+
     def structural_gaps(self, entity_id: str, observed_slot_names: set[str], expected_slots: list[Slot]) -> list[GapFlag]:
         gaps: list[GapFlag] = []
         observed_lookup = {name.strip().lower() for name in observed_slot_names}
@@ -61,3 +66,7 @@ class GapDetector:
         if claim_draft.slot_name:
             return f"What evidence or conditions support the {claim_draft.slot_name} claim?"
         return "What evidence or conditions support this claim?"
+
+    def logical_gaps(self, claims: list[Claim], evidence: list[Evidence]) -> list[GapFlag]:
+        """Detect logical fallacies in claims and evidence."""
+        return self.logical_detector.detect(claims, evidence)

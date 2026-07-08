@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import time
+from concurrent.futures import ThreadPoolExecutor
 from typing import TYPE_CHECKING, Any
 from uuid import uuid4
 
@@ -28,6 +29,7 @@ from .utils import normalize_text
 # Maximum claims to pass to LLM for relevance judgment. The LLM decides what
 # matters — no hardcoded similarity threshold. This cap bounds token usage.
 _MAX_EXPERIENCE_CLAIMS: int = 30
+_VERBOSITY_CLAIM_LIMITS = {"warn": 5, "info": 15, "debug": 30}
 
 # Epistemic status weights for ranking. Confirmed claims rank highest because
 # they have passed the evidence gate. Applied as a multiplier on retrieval scores.
@@ -40,38 +42,26 @@ _EPISTEMIC_WEIGHTS: dict[str, float] = {
     "Retracted": 0.1,
 }
 
-_EXPLORE_EXPERIENCE_SYSTEM = """\
-You are a domain expert providing a consultation. You have access to:
-1. Your general knowledge of the field
-2. Accumulated experience from expert sources (claims with evidence status)
-
-IMPORTANT: Produce ONE integrated response. Do NOT use section headers like
-[WORLD VIEW], [EXPERIENCE], [DISCERNED POSITION]. That is a database format,
-not a consultation. A real expert gives a single, cohesive answer.
-
-Rules:
-- When system experience exists, ground your answer in it. Reference claims by
-  their status naturally: "evidence suggests...", "experts disagree on...",
-  "established research shows..."
-- When claims conflict, present both sides fairly and note which has stronger
-  evidence. Do NOT force consensus — preserve genuine disagreement.
-- When you don't have enough system experience to answer confidently, say so.
-  "Based on limited data, I can suggest... but I'd want more evidence on..."
-- If cross-domain patterns are relevant, mention them naturally.
-- Be direct and practical — like a consultant who has studied the field and
-  has notes from prior expert consultations.
-- If the system has NO experience on a topic, acknowledge it and answer from
-  general knowledge, noting that the answer is not grounded in accumulated
-  evidence.
-
-The claims provided have these statuses:
-- Confirmed: evidence-backed, passed the evidence gate
-- Unverified: observed but not yet proven
-- Disputed: experts disagree — present BOTH positions
-
-If there are disputed claims, you MUST present both sides and note which has
-stronger evidence. Do not pick a side unless the evidence clearly favors one.
-"""
+_EXPLORE_PROMPTS = {
+    "warn": (
+        "You are a domain expert giving a brief consultation. "
+        "Answer in 1-2 sentences. Focus on the single most important finding "
+        "and any critical unknowns. If experts disagree, state that briefly. "
+        "Be direct and actionable."
+    ),
+    "info": (
+        "You are a domain expert providing a consultation. You have access to "
+        "general knowledge and accumulated experience from expert sources. "
+        "Produce ONE integrated response. When claims conflict, present both "
+        "sides and note which has stronger evidence. Be practical and direct."
+    ),
+    "debug": (
+        "You are a domain expert providing a detailed analysis. Cover: "
+        "1) What is generally known. 2) What the system has learned (reference "
+        "claim statuses). 3) Where experts disagree. 4) Cross-domain connections. "
+        "5) Confidence level. Be thorough but organized."
+    ),
+}
 
 # Progress callback signature: (pct: float 0.0-1.0, stage: str, detail: str|None)
 ProgressCallback = "Callable[[float, str, str | None], None]"
@@ -145,7 +135,7 @@ class KnowledgeEngine:
         self.query_processor = query_processor
         self.cache = cache
         self.slot_learner = SlotLearner()
-        self.gap_detector = GapDetector()
+        self.gap_detector = GapDetector(llm_client=llm_client)
         self.conflict_detector = ConflictDetector()
         self.resolution_memory = ResolutionMemory(self.store)
         self.evidence_ledger = EvidenceLedger()
@@ -352,6 +342,13 @@ class KnowledgeEngine:
                 self.store.get_expected_slots(entity.id or ""),
             )
         )
+        # Logical gap detection
+        if self.llm_client is not None:
+            logical_gap_flags = self.gap_detector.logical_gaps(
+                claims=new_claims,
+                evidence=[],
+            )
+            gap_flags.extend(logical_gap_flags)
         _pt.done(5)
 
         # Embedding
@@ -664,13 +661,14 @@ class KnowledgeEngine:
         else:
             checks["embeddings"] = {"status": "not_configured"}
 
-        # LLM
+        # LLM — use higher max_tokens because MiMo reasoning model consumes
+        # budget on reasoning_content before producing the answer.
         if self.llm_client is not None:
             try:
                 self.llm_client.complete_sync(
                     system="Reply with one word: healthy",
                     user="health check",
-                    max_tokens=10,
+                    max_tokens=200,
                 )
                 checks["llm"] = {"status": "healthy"}
             except Exception as e:
@@ -773,7 +771,7 @@ class KnowledgeEngine:
 
         return {"actions": actions, "timestamp": datetime.now(timezone.utc).isoformat()}
 
-    def explore_experience(self, query: str, domain: str | None = None) -> dict[str, Any]:
+    def explore_experience(self, query: str, domain: str | None = None, verbosity: str = "warn") -> dict[str, Any]:
         """Synthesize world knowledge discerned through accumulated system experience.
 
         Step 1: Ask the LLM what the world generally knows (parametric knowledge).
@@ -785,17 +783,19 @@ class KnowledgeEngine:
         if self.llm_client is None:
             return {"error": "explore_experience requires an LLM client (KE_MIMO_API_KEY)"}
 
-        # Step 1: world knowledge via LLM parametric knowledge.
-        world_knowledge = self.llm_client.complete_sync(
-            system=(
-                "You are a knowledgeable expert. Answer the question based on general world "
-                "knowledge. Be concise and factual. Acknowledge uncertainty where appropriate."
-            ),
-            user=query,
-        )
+        # Step 1: world knowledge + query expansion in parallel (saves ~3s).
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            world_future = pool.submit(
+                self.llm_client.complete_sync,
+                system="You are a knowledgeable expert. Answer based on general world knowledge. Be concise.",
+                user=query,
+            )
+            expansion_future = pool.submit(
+                self.query_processor.process, query, domain
+            ) if self.query_processor else None
 
-        # Step 1b: optional query expansion/decomposition for better recall.
-        processed = self.query_processor.process(query, domain) if self.query_processor else None
+        world_knowledge = world_future.result()
+        processed = expansion_future.result() if expansion_future else None
         search_queries = processed.all_queries if processed else [query]
 
         # Step 2: system experience via hybrid search (all epistemic statuses).
@@ -833,7 +833,8 @@ class KnowledgeEngine:
                 ),
                 reverse=True,
             )
-            experience_claims = raw_hits[:_MAX_EXPERIENCE_CLAIMS]
+            claim_limit = _VERBOSITY_CLAIM_LIMITS.get(verbosity, _MAX_EXPERIENCE_CLAIMS)
+            experience_claims = raw_hits[:claim_limit]
         # Step 2b: graph traversal — expand from matched claims to related context.
         graph_context: list[dict] = []
         if experience_claims:
@@ -904,7 +905,7 @@ class KnowledgeEngine:
             )
 
         synthesis = self.llm_client.complete_sync(
-            system=_EXPLORE_EXPERIENCE_SYSTEM,
+            system=_EXPLORE_PROMPTS.get(verbosity, _EXPLORE_PROMPTS["info"]),
             user=(
                 f"Question: {query}\n\n"
                 f"World knowledge:\n{world_knowledge}\n\n"
