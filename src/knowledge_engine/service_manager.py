@@ -182,18 +182,64 @@ class ServiceManager:
 
         return False
 
+    def _find_neo4j(self) -> str | None:
+        """Try to find Neo4j installation in common locations."""
+        import glob as glob_mod
+
+        # Common installation paths
+        search_paths = [
+            "C:/Program Files/neo4j*",
+            "C:/Program Files (x86)/neo4j*",
+            "C:/neo4j*",
+            "C:/Users/*/neo4j*",
+            "C:/tools/neo4j*",
+            "C:/apps/neo4j*",
+        ]
+
+        for pattern in search_paths:
+            matches = glob_mod.glob(pattern)
+            for match in matches:
+                # Check for bin/neo4j.bat or bin/neo4j
+                bin_bat = Path(match) / "bin" / "neo4j.bat"
+                bin_sh = Path(match) / "bin" / "neo4j"
+                if bin_bat.exists():
+                    return str(bin_bat)
+                if bin_sh.exists():
+                    return str(bin_sh)
+
+        # Check if neo4j is in PATH
+        try:
+            result = subprocess.run(
+                ["where", "neo4j"],
+                capture_output=True,
+                text=True,
+                timeout=5,
+            )
+            if result.returncode == 0 and result.stdout.strip():
+                return result.stdout.strip().split("\n")[0]
+        except Exception:
+            pass
+
+        return None
+
     def start_neo4j(self) -> ServiceResult:
         """Start Neo4j database.
 
         Returns:
             ServiceResult with status and details
         """
+        # Try to find Neo4j if path not configured
         if not self.neo4j_path:
-            return ServiceResult(
-                service="neo4j",
-                status=ServiceStatus.NOT_CONFIGURED,
-                message="KE_NEO4J_PATH not configured",
-            )
+            found_path = self._find_neo4j()
+            if found_path:
+                self.neo4j_path = found_path
+                logger.info(f"Auto-detected Neo4j at {found_path}")
+            else:
+                return ServiceResult(
+                    service="neo4j",
+                    status=ServiceStatus.NOT_CONFIGURED,
+                    message="Neo4j not found. Install from https://neo4j.com/download/ or set KE_NEO4J_PATH in .env",
+                )
 
         neo4j_path = Path(self.neo4j_path)
         if not neo4j.exists():

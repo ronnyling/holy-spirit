@@ -65,7 +65,9 @@ def build_engine_from_env(
         manager = ServiceManager()
         results = manager.ensure_all_services()
         for name, result in results.items():
-            if result.status == ServiceStatus.ERROR:
+            if result.status == ServiceStatus.NOT_CONFIGURED:
+                print(f"INFO: {name} not configured — {result.message}", file=sys.stderr)
+            elif result.status == ServiceStatus.ERROR:
                 print(f"WARNING: {name} failed to start: {result.message}", file=sys.stderr)
             elif result.status == ServiceStatus.RUNNING:
                 print(f"  ✓ {name}: {result.message}")
