@@ -181,10 +181,12 @@ goes to the LLM. This boundary must not be crossed casually.
 |---|---|---|
 | Transcript chunking + documentation + housekeeping | Deterministic code | Structure-aware slicing and hashing |
 | Structural gap check (expected slot missing) | Deterministic code | It is a schema-presence check |
+| Logical gap detection (circular reasoning, cherry-picking, over-generalization) | Deterministic code | Graph analysis and heuristics over existing claims/evidence |
 | Slot counting and threshold detection | Deterministic code | Pure statistics |
 | Evidence scoring | Deterministic code | Arithmetic over credibility |
 | Cycle detection | Deterministic code (native Cypher) | Graph reachability over `SUPPORTS` edges |
 | Conflict signature construction | Deterministic code | Normalized string key |
+| Unstated-assumption detection | LLM | Requires understanding of implicit reasoning gaps |
 | Semantic gap detection | LLM | Requires meaning, not presence |
 | Claim reconciliation and terminology mapping | LLM | Same concept, different words |
 | Conflict interpretation and resolution proposal | LLM | Requires judgment |
@@ -257,6 +259,7 @@ the sum of evidence credibility (0-1 each). Source kind still governs trust and 
 ### Gap Rules
 
 - Structural gaps are deterministic: expected slot missing.
+- Logical gaps are deterministic: circular reasoning, cherry-picking, over-generalization (with optional LLM for unstated assumptions).
 - Semantic gaps are heuristic / LLM-backed: unclear context, missing rationale, missing conditions.
 - Gap checking runs before conflict checking.
 - The engine should ask for missing data immediately so you can clarify on the spot.
@@ -323,6 +326,7 @@ but not yet built.
 - Orchestration of the full pipeline in `engine.py`
 - Slot observation and threshold-based promotion suggestions, with human-gated confirmation
 - Structural gap detection that runs before conflict detection
+- Logical gap detection (`LogicalGapDetector`): circular reasoning, cherry-picking, over-generalization, and unstated-assumption checks — runs as part of the gap-check phase alongside structural and semantic gaps
 - Same-aspect (entity + slot) conflict detection
 - Resolution-case creation and reopening from similar prior cases
 - Per-domain evidence gates and evidence scoring
