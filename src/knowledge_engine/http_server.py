@@ -17,14 +17,28 @@ Endpoints:
 from __future__ import annotations
 
 import json
+import logging
+import sys
 import threading
 from http.server import HTTPServer, BaseHTTPRequestHandler
 from typing import Any
 
-from .bootstrap import build_engine_from_env
 from .hardware import get_6dfov_components, build_device_capabilities
 
-engine = build_engine_from_env()
+logger = logging.getLogger(__name__)
+
+# Engine initialization - graceful fallback if Neo4j unavailable
+engine = None
+_engine_error = None
+
+try:
+    from .bootstrap import build_engine_from_env
+    engine = build_engine_from_env()
+    print("✓ Knowledge Engine initialized successfully")
+except Exception as e:
+    _engine_error = str(e)
+    print(f"⚠ Knowledge Engine unavailable: {e}", file=sys.stderr)
+    print("  HTTP server will start but engine features will be limited", file=sys.stderr)
 
 # Store for unused capabilities
 _unused_capabilities: dict[str, list[dict]] = {}
@@ -88,6 +102,14 @@ class MCPHandler(BaseHTTPRequestHandler):
             self.wfile.write(json.dumps({"error": "Not found"}).encode())
 
     def _handle_state(self):
+        if engine is None:
+            self._set_headers(503)
+            self.wfile.write(json.dumps({
+                "error": "Knowledge Engine not available",
+                "reason": _engine_error or "Neo4j not connected",
+                "status": "degraded"
+            }).encode())
+            return
         result = engine.state_snapshot()
         self._set_headers(200)
         self.wfile.write(json.dumps(result, indent=2).encode())
@@ -198,35 +220,45 @@ class MCPHandler(BaseHTTPRequestHandler):
 
     def _call_tool(self, tool_name: str, args: dict) -> Any:
         """Route tool calls to engine methods."""
-        if tool_name == "state_snapshot":
-            return engine.state_snapshot()
-        elif tool_name == "classify_intent":
-            return engine.classify_intent(args.get("text", ""))
-        elif tool_name == "search_claims":
-            return engine.search_claims(
-                query=args.get("query", ""),
-                domain=args.get("domain"),
-                limit=args.get("limit", 10)
-            )
-        elif tool_name == "explore_experience":
-            return engine.explore_experience(
-                query=args.get("query", ""),
-                domain=args.get("domain")
-            )
-        elif tool_name == "ingest_transcript":
-            from .contracts import TranscriptInput, ClaimDraft
-            transcript_data = args.get("transcript", {})
-            transcript = TranscriptInput(**transcript_data)
-            return engine.ingest_transcript(transcript)
-        elif tool_name == "list_domains":
-            return self._list_domains()
-        elif tool_name == "get_6dfov_requirements":
+        # Tools that don't require engine
+        if tool_name == "get_6dfov_requirements":
             components = get_6dfov_components()
             return {
                 "components": [c.to_dict() for c in components],
             }
-        else:
-            return {"error": f"Unknown tool: {tool_name}"}
+
+        # Tools that require engine
+        if engine is None:
+            return {"error": "Knowledge Engine not available. Neo4j may not be running."}
+
+        try:
+            if tool_name == "state_snapshot":
+                return engine.state_snapshot()
+            elif tool_name == "classify_intent":
+                return engine.classify_intent(args.get("text", ""))
+            elif tool_name == "search_claims":
+                return engine.search_claims(
+                    query=args.get("query", ""),
+                    domain=args.get("domain"),
+                    limit=args.get("limit", 10)
+                )
+            elif tool_name == "explore_experience":
+                return engine.explore_experience(
+                    query=args.get("query", ""),
+                    domain=args.get("domain")
+                )
+            elif tool_name == "ingest_transcript":
+                from .contracts import TranscriptInput, ClaimDraft
+                transcript_data = args.get("transcript", {})
+                transcript = TranscriptInput(**transcript_data)
+                return engine.ingest_transcript(transcript)
+            elif tool_name == "list_domains":
+                return self._list_domains()
+            else:
+                return {"error": f"Unknown tool: {tool_name}"}
+        except Exception as e:
+            logger.error(f"Tool call failed: {tool_name} - {e}")
+            return {"error": f"Tool execution failed: {str(e)}"}
 
     def _list_domains(self) -> dict:
         """List all knowledge domains."""
