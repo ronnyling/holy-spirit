@@ -72,6 +72,10 @@ class ServiceManager:
             neo4j_uri: Neo4j URI (e.g., "bolt://localhost:7687")
             ollama_path: Path to ollama binary (default: "ollama" in PATH)
         """
+        # Load .env if not already loaded
+        from .bootstrap import load_dotenv
+        load_dotenv()
+
         self.neo4j_path = neo4j_path or os.environ.get("KE_NEO4J_PATH", "")
         self.neo4j_uri = neo4j_uri or os.environ.get("KE_NEO4J_URI", "")
         self.ollama_path = ollama_path or os.environ.get("KE_OLLAMA_PATH", "ollama")
@@ -242,7 +246,7 @@ class ServiceManager:
                 )
 
         neo4j_path = Path(self.neo4j_path)
-        if not neo4j.exists():
+        if not neo4j_path.exists():
             return ServiceResult(
                 service="neo4j",
                 status=ServiceStatus.ERROR,

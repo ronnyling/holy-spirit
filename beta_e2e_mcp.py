@@ -144,7 +144,7 @@ def test_scenario_1_ingestion(mcp: MCPToolCaller) -> dict:
                 ],
             ),
         )
-        status = "CONFIRMED" if outcome.get("confirmed_claim_ids") else "UNVERIFIED"
+        status = "CONFIRMED" if outcome.confirmed_claim_ids else "UNVERIFIED"
         print(f"  [{status}] {t['entity_name']}: {t['text'][:60]}...")
         results.append({"entity": t["entity_name"], "status": status})
 

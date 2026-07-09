@@ -1,0 +1,129 @@
+{
+  "timestamp": "2026-07-09T06:15:17.332443+00:00",
+  "summary": {
+    "total_calls": 21,
+    "success": 21,
+    "error": 0,
+    "total_latency_ms": 266433.95,
+    "avg_latency_ms": 12687.33,
+    "metrics": {
+      "ingest_transcript": 21.30136169999605,
+      "state_snapshot": 0.06668759998865426,
+      "explore_experience": 26.992343699996127,
+      "list_open_cases": 0.02001110000128392,
+      "classify_intent": 0.005862099991645664
+    }
+  },
+  "results": {
+    "scenario_1": {
+      "transcripts": [
+        {
+          "entity": "Dr. Momentum",
+          "status": "UNVERIFIED"
+        },
+        {
+          "entity": "Dr. Value",
+          "status": "UNVERIFIED"
+        },
+        {
+          "entity": "Prof. Cap Rate",
+          "status": "UNVERIFIED"
+        },
+        {
+          "entity": "Contrarian Quant",
+          "status": "UNVERIFIED"
+        }
+      ],
+      "state": {
+        "entities": 3,
+        "claims": 3,
+        "confirmed_claims": 0,
+        "evidence": 3,
+        "slots": 3,
+        "resolution_cases": 0,
+        "open_cases": 0
+      }
+    },
+    "scenario_2": {
+      "queries": [
+        {
+          "query": "What are the key principles in trading?",
+          "claims": 2,
+          "patterns": 2
+        },
+        {
+          "query": "How do different schools of thought view momentum?",
+          "claims": 2,
+          "patterns": 2
+        },
+        {
+          "query": "What conflicts exist in the trading domain?",
+          "claims": 2,
+          "patterns": 2
+        }
+      ]
+    },
+    "scenario_3": {
+      "open_cases": 0,
+      "resolved": false
+    },
+    "scenario_4": {
+      "results": [
+        {
+          "text": "Hello, how are you?",
+          "expected": "chat",
+          "actual": "chat",
+          "match": true
+        },
+        {
+          "text": "Here's evidence showing momentum works in trending markets",
+          "expected": "evidence",
+          "actual": "evidence",
+          "match": true
+        },
+        {
+          "text": "I disagree with the claim that momentum always works",
+          "expected": "dispute",
+          "actual": "dispute",
+          "match": true
+        },
+        {
+          "text": "Let me clarify - this only applies in bull markets",
+          "expected": "correction",
+          "actual": "correction",
+          "match": true
+        },
+        {
+          "text": "What are the key principles in trading?",
+          "expected": "exploration",
+          "actual": "exploration",
+          "match": true
+        },
+        {
+          "text": "Let me share my analysis of the market",
+          "expected": "learning",
+          "actual": "learning",
+          "match": true
+        }
+      ],
+      "accuracy": 1.0
+    },
+    "scenario_5": {
+      "gaps_count": 1,
+      "gaps": [
+        {
+          "kind": "logical",
+          "rationale": "Over-generalization: universal claim 'All stocks always follow momentum...' supported by only 1 evidence items (threshold: 5)"
+        }
+      ]
+    },
+    "scenario_6": {
+      "benchmarks": {
+        "ingest_ms": 21301.47,
+        "query_ms": 26992.37,
+        "intent_ms": 5.88,
+        "snapshot_ms": 66.73
+      }
+    }
+  }
+}
