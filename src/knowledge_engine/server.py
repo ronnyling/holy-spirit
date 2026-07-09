@@ -285,6 +285,112 @@ def explore_experience(query: str, domain: str | None = None) -> dict[str, Any]:
     return engine.explore_experience(query, domain=domain)
 
 
+# -- 6dfov hardware capability tools -------------------------------------------
+
+
+@mcp_server.tool()
+def get_6dfov_requirements() -> dict[str, Any]:
+    """Return the hardware requirements for 6dfov streaming.
+
+    Lists all required, recommended, and optional components with their
+    minimum specifications.
+    """
+    from .hardware import get_6dfov_components
+    components = get_6dfov_components()
+    return {
+        "components": [c.to_dict() for c in components],
+        "required_count": sum(1 for c in components if c.requirement.value == "required"),
+        "recommended_count": sum(1 for c in components if c.requirement.value == "recommended"),
+        "optional_count": sum(1 for c in components if c.requirement.value == "optional"),
+    }
+
+
+@mcp_server.tool()
+def register_device_capabilities(
+    device_id: str,
+    device_name: str,
+    os_version: str,
+    app_version: str,
+    component_status: dict[str, Any],
+) -> dict[str, Any]:
+    """Register a device's hardware capabilities for 6dfov readiness check.
+
+    Args:
+        device_id: Unique device identifier (e.g., Android device ID)
+        device_name: Human-readable device name (e.g., "Poco F4 GT")
+        os_version: OS version (e.g., "Android 14")
+        app_version: App version (e.g., "1.0.0")
+        component_status: Dict of component_name -> {available: bool, capabilities: dict}
+
+    Returns:
+        Device capability profile with 6dfov readiness assessment.
+    """
+    from .hardware import build_device_capabilities
+
+    capabilities = build_device_capabilities(
+        device_id=device_id,
+        device_name=device_name,
+        os_version=os_version,
+        app_version=app_version,
+        component_status=component_status,
+    )
+
+    # Store in engine state for future reference
+    if not hasattr(engine, '_device_capabilities'):
+        engine._device_capabilities = {}
+    engine._device_capabilities[device_id] = capabilities
+
+    return capabilities.to_dict()
+
+
+@mcp_server.tool()
+def check_6dfov_readiness(device_id: str) -> dict[str, Any]:
+    """Check if a registered device is ready for 6dfov streaming.
+
+    Returns readiness score, missing components, and recommendations.
+    """
+    if not hasattr(engine, '_device_capabilities'):
+        return {"error": "No devices registered. Call register_device_capabilities first."}
+
+    capabilities = engine._device_capabilities.get(device_id)
+    if capabilities is None:
+        return {"error": f"Device {device_id} not found. Register it first."}
+
+    result = capabilities.to_dict()
+
+    # Add recommendations
+    recommendations = []
+    for c in capabilities.components:
+        if c.status.value == "unavailable":
+            if c.requirement.value == "required":
+                recommendations.append(f"CRITICAL: {c.name} is required for 6dfov")
+            elif c.requirement.value == "recommended":
+                recommendations.append(f"RECOMMENDED: {c.name} improves 6dfov experience")
+
+    result["recommendations"] = recommendations
+    result["can_run_6dfov"] = capabilities.is_6dfov_ready
+
+    return result
+
+
+@mcp_server.tool()
+def list_registered_devices() -> dict[str, Any]:
+    """List all devices registered for 6dfov capability checking."""
+    if not hasattr(engine, '_device_capabilities'):
+        return {"devices": [], "count": 0}
+
+    devices = []
+    for device_id, caps in engine._device_capabilities.items():
+        devices.append({
+            "device_id": device_id,
+            "device_name": caps.device_name,
+            "is_ready": caps.is_6dfov_ready,
+            "readiness_score": caps.readiness_score,
+        })
+
+    return {"devices": devices, "count": len(devices)}
+
+
 # -- resources -----------------------------------------------------------------
 
 
