@@ -196,6 +196,7 @@ class ServiceManager:
             "C:/Program Files (x86)/neo4j*",
             "C:/neo4j*",
             "C:/Users/*/neo4j*",
+            "C:/Users/*/Documents/neo4j*",
             "C:/tools/neo4j*",
             "C:/apps/neo4j*",
         ]
