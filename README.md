@@ -257,6 +257,13 @@ the sum of evidence credibility (0-1 each). Source kind still governs trust and 
 | Real estate | 0.8 | 1 | Conditional/precedent evidence, context-tagged |
 | Default | 0.8 | 1 | Fallback for unclassified domains |
 
+The gate is evaluated by `EvidenceLedger.evaluate()` in `evidence.py`: sum of credibility values across all evidence drafts must meet `minimum_score`, AND the count of unique source_ids must meet `minimum_sources`.
+
+**Important distinction: Evidence gates vs Retrieval**
+
+- **Evidence gates (promotion)**: USE score-based thresholds. Claims must pass the domain-specific gate to move from `Unverified` → `Confirmed`. This is the quality assurance mechanism.
+- **Retrieval/query time**: Does NOT use scores. `explore_experience()` sends all hits (up to 30) to the LLM for relevance judgment, ranked by epistemic weight (Confirmed=1.0, Disputed=0.8, Unverified=0.6). The LLM decides relevance, not a score threshold.
+
 - User-sourced claims never auto-confirm on ingestion; they enter as `Unverified` and must be promoted
   with evidence.
 - Internal wiki evidence contributes only if the supporting claim is already `Confirmed` and adding it
@@ -280,20 +287,34 @@ the sum of evidence credibility (0-1 each). Source kind still governs trust and 
 
 ## Processing Pipeline
 
-1. Classify user intent via Ollama embeddings (evidence, dispute, correction, exploration, learning, chat).
-2. Route to appropriate handler based on intent.
-3. Ingest transcript.
-4. Harbour it: normalize, hash, chunk, auto-document, register (idempotent housekeeping). Identical content under any file name **short-circuits the rest of the pipeline** — no re-extraction, no re-embedding.
-5. Extract claims.
-6. Observe slots and learn frequencies.
-7. Run structural, logical, and semantic gap checks (gap check runs **before** conflict check).
-8. If gaps exist, flag them immediately.
-9. Run conflict detection against canonical knowledge.
-10. Open or reuse a resolution case if needed.
-11. Embed new claims (on-demand model, warmed then released; batched and `num_ctx`-bounded).
-12. Research with the user to gather evidence.
-13. Promote to canonical only when evidence gates are satisfied.
-14. Keep the evidence chain and resolution history.
+The core pipeline lives in `engine.py` → `KnowledgeEngine.ingest_transcript()`. It has **8 weighted stages**, tracked by `ProgressTracker`:
+
+| Stage | Name | Weight | What Actually Happens |
+|-------|------|--------|----------------------|
+| 0 | `dedup_check` | 1 | Content-hash check (SHA-256). Identical content **short-circuits the entire pipeline** — no re-chunk, re-extract, or re-embed. |
+| 1 | `classify` | 1 | If domain or entity_name is blank, uses `DomainClassifier.classify()` (trading/real estate/tcm) + `classify_open()` (novel domains). Auto-fills domain and entity_name. |
+| 2 | `harbour` | 1 | `TranscriptRegistry.harbour()` writes raw text to `transcripts/`, generates markdown document in `documents/`, indexes in `manifest.json`. |
+| 3 | `extract` | 5 (heaviest) | `ClaimExtractor.extract()` splits transcript into chunks, sends each chunk to LLM in parallel (`ThreadPoolExecutor`), parses JSON arrays into `ClaimDraft` objects. Auto-tunes parallelism: <50 chunks=2 workers, <500=4, else=8. |
+| 4 | `process_claims` | 2 | For each ClaimDraft: builds `Claim` model (UNVERIFIED), stores it, records evidence if any, observes slots via `SlotLearner.observe()`. If slot crosses threshold, queues promotion suggestion. |
+| 5 | `gap_check` | 1 | Two sub-checks: (a) **Structural gaps** — Expected slots not observed; (b) **Logical gaps** — LLM-powered detection of circular reasoning, cherry-picking, over-generalization, unstated assumptions. Gap check runs **before** conflict check. |
+| 6 | `embed` | 2 | `EmbeddingClient.embed_texts()` batch-embeds all new claims (1024-dim), stores vectors via `store.set_claim_embedding()`. |
+| 7 | `conflict_check` | 2 | `ConflictDetector.detect()` compares each new claim against existing Confirmed and Disputed claims. Two conflict paths: keyword opposition (prefix matching against `_OPPOSITION_PAIRS` like "buy/sell", "bullish/bearish") OR text similarity >= 0.35. |
+
+### Post-Pipeline Outcomes
+
+After the 8-stage pipeline completes, claims follow one of these paths:
+
+- **No conflict + evidence passes gate** → Auto-confirm to `Confirmed` (engine.py line 429-433)
+- **Conflict detected** → Set to `Disputed`, open `ResolutionCase`, gather conflict evidence, generate "heckle prompt" for user
+- **User source** → Stays `Unverified` (user claims never auto-confirm)
+- **Gap flagged** → Stays `Unverified`, flagged for human clarification
+- **Slot threshold crossed** → Queued for human confirmation via `confirm_slot()`
+
+### Manual Promotion Paths
+
+- `promote_claim()` — User provides evidence drafts → evaluate gate → Confirmed
+- `accept_on_authority()` — Batch promote with authority source (credibility 0.9), requires `accepted_by` name
+- `EvidenceHunter.hunt()` — Auto web search → extract evidence → evaluate gate → auto-promote if passes
 
 ## Domain Behavior
 

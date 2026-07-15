@@ -2,8 +2,8 @@ from dataclasses import dataclass, field
 from typing import List, Dict, Any
 
 @dataclass
-class EvidenceDraft:
-    """Extracted from transcript by hybrid pipeline."""
+class TranscriptEvidenceDraft:
+    """Evidence extracted from transcript by hybrid pipeline."""
     statement: str
     source_reference: str
     
@@ -61,8 +61,8 @@ class EvidenceDraft:
         llm_output: Dict[str, Any],
         document_id: str = "",
         transcript_id: str = ""
-    ) -> "EvidenceDraft":
-        """Create EvidenceDraft from LLM extraction output."""
+    ) -> "TranscriptEvidenceDraft":
+        """Create TranscriptEvidenceDraft from LLM extraction output."""
         indicator_map = {"high": 0.85, "medium": 0.5, "low": 0.2, "uncertain": 0.3}
         quality_map = {"academic": 0.9, "commercial": 0.5, "anecdotal": 0.3, "unknown": 0.2}
         method_map = {"randomized controlled trial": 0.95, "observational": 0.6, "case study": 0.4, "unknown": 0.3}

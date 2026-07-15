@@ -1,8 +1,8 @@
 import pytest
-from knowledge_engine.evidence_draft import EvidenceDraft
+from knowledge_engine.transcript_evidence import TranscriptEvidenceDraft
 
-def test_evidence_draft_creation():
-    draft = EvidenceDraft(
+def test_transcript_evidence_creation():
+    draft = TranscriptEvidenceDraft(
         statement="40% reduction in inflammation",
         source_reference="paragraph 3, sentence 2",
         source_quality="academic",
@@ -26,7 +26,7 @@ def test_evidence_draft_creation():
     assert draft.source_quality == "academic"
     assert draft.confidence_score == 0.6
 
-def test_evidence_draft_from_llm_output():
+def test_transcript_evidence_from_llm_output():
     llm_output = {
         "statement": "turmeric helps joint pain",
         "source_quality": "anecdotal",
@@ -34,7 +34,7 @@ def test_evidence_draft_from_llm_output():
         "measurement_method": "observational",
         "confidence_indicator": "low"
     }
-    draft = EvidenceDraft.from_llm_output(
+    draft = TranscriptEvidenceDraft.from_llm_output(
         llm_output,
         document_id="doc_123",
         transcript_id="transcript_456"
@@ -43,8 +43,8 @@ def test_evidence_draft_from_llm_output():
     assert draft.source_quality == "anecdotal"
     assert draft.extraction_method == "llm_hybrid"
 
-def test_evidence_draft_confidence_calculation():
-    draft = EvidenceDraft(
+def test_transcript_evidence_confidence_calculation():
+    draft = TranscriptEvidenceDraft(
         statement="test",
         source_reference="ref",
         source_quality="academic",
