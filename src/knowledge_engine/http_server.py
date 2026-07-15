@@ -97,6 +97,8 @@ class MCPHandler(BaseHTTPRequestHandler):
             self._handle_hardware_register(data)
         elif path == "/api/capabilities/log":
             self._handle_log_capabilities(data)
+        elif path == "/api/vision/ingest":
+            self._handle_vision_ingest(data)
         else:
             self._set_headers(404)
             self.wfile.write(json.dumps({"error": "Not found"}).encode())
@@ -357,6 +359,69 @@ class MCPHandler(BaseHTTPRequestHandler):
             if device_id not in _unused_capabilities:
                 _unused_capabilities[device_id] = []
             _unused_capabilities[device_id].extend(unused)
+
+    def _handle_vision_ingest(self, data: dict):
+        """Process vision data from Android device.
+
+        NO FALLBACKS: Raises errors for invalid data.
+        """
+        try:
+            vision_type = data.get("type", "vision_data")
+            mode = data.get("mode", "phone")
+            ocr_data = data.get("ocr")
+            objects = data.get("objects", [])
+            metadata = data.get("metadata", {})
+
+            if not ocr_data:
+                self._set_headers(400)
+                self.wfile.write(json.dumps({
+                    "error": "OCR data required. No fallback to empty data."
+                }).encode())
+                return
+
+            result = {
+                "status": "received",
+                "type": vision_type,
+                "mode": mode,
+                "processed": {
+                    "ocr_text_length": len(ocr_data.get("text", "")),
+                    "objects_count": len(objects),
+                    "device_id": metadata.get("device_id", "unknown")
+                }
+            }
+
+            # If OCR text is substantial, ingest as transcript
+            ocr_text = ocr_data.get("text", "")
+            if ocr_text and len(ocr_text) > 10:
+                try:
+                    from .contracts import TranscriptInput
+                    transcript = TranscriptInput(
+                        domain="vision",
+                        entity_name="camera",
+                        transcript_text=ocr_text,
+                        source_kind="external_doc",
+                        source_id=f"ocr-{metadata.get('device_id', 'unknown')}-{metadata.get('frameNumber', 0)}"
+                    )
+                    if engine:
+                        engine.ingest_transcript(transcript)
+                        result["ingested"] = True
+                    else:
+                        result["ingested"] = False
+                        result["note"] = "Engine not available"
+                except Exception as e:
+                    # NO FALLBACKS: Log error but don't silently fail
+                    logger.error(f"Vision transcript ingestion failed: {e}")
+                    result["ingested"] = False
+                    result["error"] = str(e)
+
+            self._set_headers(200)
+            self.wfile.write(json.dumps(result, indent=2).encode())
+        except Exception as e:
+            # NO FALLBACKS: Return error, don't silently degrade
+            self._set_headers(500)
+            self.wfile.write(json.dumps({
+                "error": f"Vision ingest failed: {str(e)}"
+            }).encode())
 
     def log_message(self, format, *args):
         """Suppress default logging."""
