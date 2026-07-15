@@ -3,6 +3,10 @@
 NO FALLBACKS: This module must either succeed completely or fail loudly.
 Data integrity is paramount for traceability and replicability in the
 knowledge engine's white paper.
+
+Uses LLM config system to get appropriate client:
+- HIGH priority (evidence extraction): MiMo API
+- Falls back to Ollama if MiMo not available (with warning)
 """
 import json
 import re
@@ -11,6 +15,7 @@ from typing import List, Protocol, runtime_checkable
 from .contracts import ClaimDraft, EvidenceDraft
 from .transcript_evidence import TranscriptEvidenceDraft
 from .extraction_prompt import EVIDENCE_SYSTEM_PROMPT, build_evidence_extraction_prompt
+from .llm_config import TaskType, get_llm_client
 
 
 class EvidenceExtractionError(Exception):
@@ -145,10 +150,14 @@ def enrich_claims_with_evidence(
     NO FALLBACKS: Raises EvidenceExtractionError on any failure.
     Data integrity is paramount.
 
+    Uses LLM config system:
+    - If llm_client provided, use it directly
+    - Otherwise, get client from config (HIGH priority → MiMo API)
+
     Args:
         claims: Claims to enrich with evidence
         transcript_text: Original transcript text
-        llm_client: LLM client for evidence extraction (required for enrichment)
+        llm_client: LLM client for evidence extraction (optional, uses config if None)
 
     Returns:
         Claims enriched with evidence
@@ -159,12 +168,14 @@ def enrich_claims_with_evidence(
     if not claims:
         return claims
 
+    # Get LLM client from config if not provided
     if llm_client is None:
-        raise EvidenceExtractionError(
-            "LLM client required for evidence extraction. "
-            "No fallback to empty evidence allowed - "
-            "this would compromise data integrity."
-        )
+        try:
+            llm_client = get_llm_client(TaskType.EVIDENCE_EXTRACTION)
+        except RuntimeError as e:
+            raise EvidenceExtractionError(
+                f"LLM client required for evidence extraction. {e}"
+            )
 
     enriched_claims = []
 

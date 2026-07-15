@@ -6,6 +6,7 @@ from typing import Protocol
 
 from .contracts import GapFlag, GapKind
 from .models import Claim, Evidence
+from .llm_config import TaskType, get_llm_client
 
 logger = logging.getLogger(__name__)
 
@@ -147,11 +148,20 @@ class LogicalGapDetector:
         return gaps
 
     def _detect_unstated_assumptions(self, claims: list[Claim], evidence: list[Evidence]) -> list[GapFlag]:
-        """Use LLM to detect implicit assumptions not backed by evidence."""
+        """Use LLM to detect implicit assumptions not backed by evidence.
+
+        Uses LOW priority task - can use Ollama for cost savings.
+        """
         gaps = []
 
-        if self.llm_client is None:
-            return gaps
+        # Get LLM client from config if not provided
+        llm_client = self.llm_client
+        if llm_client is None:
+            try:
+                llm_client = get_llm_client(TaskType.UNSTATED_ASSUMPTIONS)
+            except RuntimeError:
+                logger.warning("No LLM client available for unstated assumption detection")
+                return gaps
 
         evidence_count: dict[str, int] = {}
         for ev in evidence:
@@ -169,7 +179,7 @@ class LogicalGapDetector:
             )
 
             try:
-                response = self.llm_client.complete_sync(system=system, user=claim.statement)
+                response = llm_client.complete_sync(system=system, user=claim.statement)
                 data = json.loads(response)
                 assumptions = data.get("assumptions", [])
 
