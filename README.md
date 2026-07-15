@@ -386,6 +386,33 @@ but not yet built.
 - HTTP/SSE transport for the MCP server (currently stdio only — works for Copilot, not for autonomous pipeline agents).
 - Tests for `evidence_hunter.py` (requires mocked LLM + `SearchProvider`).
 
+### Context-Aware Ingestion (Implemented 2026-07-15)
+
+**Enhanced extraction with evidence and provenance:**
+
+- `TranscriptEvidenceDraft` — evidence extracted from transcripts with source quality, conditions, methodology, and confidence scoring
+- `ProvenanceChain` — complete trace from claim to source documents and original transcripts
+- `SemanticDeduplicator` — finds duplicate claims across transcripts using text similarity
+- `ConflictDetector` — domain-specific keyword opposition (trading, TCM, real estate) with bidirectional detection
+- `CodeExtractors` — document structure parsing and metadata extraction
+- LLM evidence extraction with validation — extracts evidence from transcripts to support claims
+
+**No-fallbacks policy enforced throughout:**
+- `EvidenceExtractionError` raised instead of silent degradation
+- `KeyError` raised for nonexistent claims (no None returns)
+- `ValueError` raised for invalid domains/configurations
+- All errors include clear messages explaining what failed and why
+
+**New modules:**
+- `src/knowledge_engine/transcript_evidence.py` — TranscriptEvidenceDraft model
+- `src/knowledge_engine/provenance.py` — ProvenanceChain model
+- `src/knowledge_engine/extraction_prompt.py` — Enhanced extraction prompts
+- `src/knowledge_engine/code_extractors.py` — Document structure and metadata extractors
+- `src/knowledge_engine/semantic_dedup.py` — Semantic deduplication
+- `src/knowledge_engine/conflict_detector.py` — Enhanced conflict detection
+- `src/knowledge_engine/claim_extractor_evidence.py` — Evidence extraction integration
+- `src/knowledge_engine/keyword_pairs.json` — Domain-specific keyword opposition pairs
+
 ## MCP Interface
 
 The project exposes an MCP server (FastMCP, stdio transport) with these tools:
@@ -428,9 +455,18 @@ It also exposes a `knowledge://state` resource with a JSON snapshot of the curre
 - `src/knowledge_engine/llm.py` - MiMo (OpenAI-compatible) chat client (async httpx + tenacity retry)
 - `src/knowledge_engine/extraction.py` - LLM-backed claim extraction (unbounded LLM + deterministic parsing)
 - `src/knowledge_engine/bootstrap.py` - shared engine bootstrap + `.env` loader with auto-start (used by server and CLI)
+- `src/knowledge_engine/transcript_evidence.py` - TranscriptEvidenceDraft model for evidence extracted from transcripts
+- `src/knowledge_engine/provenance.py` - ProvenanceChain model for knowledge tracing
+- `src/knowledge_engine/extraction_prompt.py` - Enhanced extraction prompts for claims + evidence
+- `src/knowledge_engine/code_extractors.py` - Document structure and metadata extractors
+- `src/knowledge_engine/semantic_dedup.py` - Semantic deduplication for claims across transcripts
+- `src/knowledge_engine/conflict_detector.py` - Enhanced conflict detection with domain-specific keyword opposition
+- `src/knowledge_engine/claim_extractor_evidence.py` - Evidence extraction integration with LLM
+- `src/knowledge_engine/keyword_pairs.json` - Domain-specific keyword opposition pairs (trading, TCM, real estate)
 - `scripts/ke.py` - command-line interface (ingest + ask) for UAT on the file-backed store
 - `docs/UAT-Usage-Guide.md` - step-by-step guide: setup, transcript folder layout, ingest, query, limitations
 - `tests/` - unit tests, graph schema tests, gated Neo4j integration tests, extraction + persistence tests, and beta scenarios
+- `tests/e2e_test.py` - end-to-end tests simulating user workflows (main.py, MCP, Streamlit, APK)
 - `beta_*.py` - runnable end-to-end persona walkthroughs (XR copilot, autonomous scraping agent)
 - `docker-compose.yml` - Neo4j 5 (graph + native vector index)
 - `.env.example` - required backend configuration (no fallbacks)
