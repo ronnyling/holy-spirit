@@ -41,20 +41,34 @@ def test_low_priority_tasks():
         TaskType.UNSTATED_ASSUMPTIONS,
         TaskType.EVIDENCE_QUALITY_ASSESSMENT,
         TaskType.SIMPLE_CLASSIFICATION,
-        TaskType.TEXT_SIMILARITY,
     ]
     for task in low_priority_tasks:
         assert TASK_PRIORITIES[task] == TaskPriority.LOW, f"{task} should be LOW priority"
 
 
+def test_embedding_tasks():
+    """Embedding tasks are correctly identified."""
+    embedding_tasks = [
+        TaskType.TEXT_SIMILARITY,
+    ]
+    for task in embedding_tasks:
+        assert TASK_PRIORITIES[task] == TaskPriority.EMBEDDING, f"{task} should be EMBEDDING priority"
+
+
 def test_config_no_clients():
     """Config with no clients raises error for all tasks."""
-    config = LLMConfig(mimo_client=None, ollama_client=None)
+    config = LLMConfig(mimo_client=None, ollama_client=None, embedding_client=None)
 
-    for task_type in TaskType:
+    # Test HIGH and LOW priority tasks
+    for task_type in [TaskType.CLAIM_EXTRACTION, TaskType.UNSTATED_ASSUMPTIONS]:
         with pytest.raises(RuntimeError) as exc_info:
             config.get_client(task_type)
         assert "No client available" in str(exc_info.value) or "requires MiMo" in str(exc_info.value)
+
+    # Test EMBEDDING tasks (different error message)
+    with pytest.raises(RuntimeError) as exc_info:
+        config.get_client(TaskType.TEXT_SIMILARITY)
+    assert "requires embedding client" in str(exc_info.value)
 
 
 def test_config_mimo_only():
@@ -143,11 +157,11 @@ def test_get_status():
 def test_ollama_client_from_env():
     """OllamaClient can be created from environment."""
     # Save original env
-    orig_model = os.environ.get("KE_OLLAMA_LLM_MODEL")
+    orig_model = os.environ.get("KE_OLLAMA_SLM_MODEL")
     orig_url = os.environ.get("KE_OLLAMA_BASE_URL")
 
     try:
-        os.environ["KE_OLLAMA_LLM_MODEL"] = "test-model"
+        os.environ["KE_OLLAMA_SLM_MODEL"] = "test-model"
         os.environ["KE_OLLAMA_BASE_URL"] = "http://localhost:11434"
 
         client = OllamaClient.from_env()
@@ -156,9 +170,9 @@ def test_ollama_client_from_env():
     finally:
         # Restore env
         if orig_model is None:
-            os.environ.pop("KE_OLLAMA_LLM_MODEL", None)
+            os.environ.pop("KE_OLLAMA_SLM_MODEL", None)
         else:
-            os.environ["KE_OLLAMA_LLM_MODEL"] = orig_model
+            os.environ["KE_OLLAMA_SLM_MODEL"] = orig_model
         if orig_url is None:
             os.environ.pop("KE_OLLAMA_BASE_URL", None)
         else:
