@@ -1,0 +1,55 @@
+{
+  "trading": {
+    "buy": "sell",
+    "long": "short",
+    "bullish": "bearish",
+    "call": "put",
+    "up": "down",
+    "rise": "fall",
+    "increase": "decrease",
+    "positive": "negative",
+    "overvalued": "undervalued",
+    "entry": "exit",
+    "hold": "sell",
+    "accumulate": "distribute",
+    "breakout": "breakdown",
+    "support": "resistance",
+    "rally": "selloff"
+  },
+  "tcm": {
+    "hot": "cold",
+    "tonify": "sedate",
+    "excess": "deficiency",
+    "yang": "yin",
+    "exterior": "interior",
+    "heat": "cold",
+    "acute": "chronic",
+    "tonifying": "clearing",
+    "warming": "cooling",
+    "ascending": "descending"
+  },
+  "real_estate": {
+    "buy": "sell",
+    "appreciate": "depreciate",
+    "rent": "own",
+    "residential": "commercial",
+    "urban": "suburban",
+    "new": "old",
+    "luxury": "affordable",
+    "growth": "decline",
+    "supply": "demand",
+    "vacant": "occupied"
+  },
+  "general": {
+    "increase": "decrease",
+    "rise": "fall",
+    "up": "down",
+    "positive": "negative",
+    "good": "bad",
+    "high": "low",
+    "more": "less",
+    "strong": "weak",
+    "improve": "worsen",
+    "success": "failure"
+  }
+}
