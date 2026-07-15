@@ -1429,6 +1429,61 @@ class KnowledgeGraphStore:
 
         return _rrf_merge(vector_rows, ft_rows, alpha=alpha, limit=k)
 
+    # -- provenance ------------------------------------------------------------
+    def get_provenance(self, claim_id: str) -> dict:
+        """Get provenance chain for a claim.
+
+        NO FALLBACKS: Raises ValueError if claim not found.
+        Data integrity is paramount for traceability.
+        """
+        rows = self._run(
+            "MATCH (c:Claim {id: $id}) "
+            "OPTIONAL MATCH (ev:Evidence)-[:SUPPORTS]->(c) "
+            "OPTIONAL MATCH (c)-[:ABOUT]->(e:Entity) "
+            "OPTIONAL MATCH (t:Transcript)-[:HAS_EVIDENCE]->(ev) "
+            "RETURN c AS claim, e AS entity, "
+            "       collect(DISTINCT ev) AS evidence, "
+            "       collect(DISTINCT t) AS transcripts",
+            id=claim_id,
+        )
+
+        if not rows or not rows[0]["claim"]:
+            raise ValueError(
+                f"Claim '{claim_id}' not found in Neo4j. "
+                "Cannot trace provenance for non-existent claim. "
+                "No silent fallback allowed."
+            )
+
+        r = rows[0]
+        claim = dict(r["claim"])
+        entity = dict(r["entity"]) if r["entity"] else None
+        evidence = [dict(ev) for ev in r["evidence"] if ev.get("id")]
+        transcripts = [dict(t) for t in r["transcripts"] if t.get("id")]
+
+        # Extract document IDs from evidence
+        document_ids = []
+        document_metadata = []
+        for ev in evidence:
+            source_id = ev.get("source_id")
+            if source_id and source_id not in document_ids:
+                document_ids.append(source_id)
+                document_metadata.append({
+                    "id": source_id,
+                    "source_kind": ev.get("source_kind", "unknown")
+                })
+
+        return {
+            "claim_id": claim_id,
+            "evidence_ids": [ev.get("id") for ev in evidence if ev.get("id")],
+            "document_ids": document_ids,
+            "transcript_ids": [t.get("id") for t in transcripts if t.get("id")],
+            "claim_metadata": claim,
+            "evidence_metadata": evidence,
+            "document_metadata": document_metadata,
+            "transcript_metadata": transcripts,
+            "entity_metadata": entity,
+        }
+
     # -- diagnostics -----------------------------------------------------------
     def counts(self) -> dict[str, int]:
         labels = (
