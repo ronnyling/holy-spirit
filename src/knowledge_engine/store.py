@@ -6,6 +6,7 @@ from pathlib import Path
 from uuid import uuid4
 
 from .models import Claim, Entity, Evidence, EpistemicStatus, ResolutionCase, Slot, SlotLifecycle
+from .provenance import ProvenanceChain
 from .utils import normalize_text, stable_signature, text_similarity
 
 
@@ -258,3 +259,50 @@ class KnowledgeStore:
             if slot.id
         }
         return store
+
+    def get_provenance(self, claim_id: str) -> ProvenanceChain:
+        """Get provenance chain for a claim.
+
+        NO FALLBACKS: Raises KeyError if claim not found.
+        Data integrity is paramount for traceability.
+        """
+        if claim_id not in self.claims:
+            raise KeyError(
+                f"Claim '{claim_id}' not found. "
+                "Cannot trace provenance for non-existent claim. "
+                "No silent fallback allowed."
+            )
+
+        claim = self.claims[claim_id]
+
+        # Get evidence for this claim
+        evidence_list = [
+            ev for ev in self.evidence.values()
+            if hasattr(ev, 'linked_claim_ids') and claim_id in ev.linked_claim_ids
+        ]
+
+        # Get documents and transcripts from evidence
+        document_ids = []
+        document_metadata = []
+        transcript_ids = []
+        transcript_metadata = []
+
+        for ev in evidence_list:
+            if hasattr(ev, 'source_id') and ev.source_id:
+                if ev.source_id not in document_ids:
+                    document_ids.append(ev.source_id)
+                    document_metadata.append({
+                        "id": ev.source_id,
+                        "source_kind": ev.source_kind if hasattr(ev, 'source_kind') else "unknown"
+                    })
+
+        return ProvenanceChain(
+            claim_id=claim_id,
+            evidence_ids=[ev.id for ev in evidence_list if hasattr(ev, 'id') and ev.id],
+            document_ids=document_ids,
+            transcript_ids=transcript_ids,
+            claim_metadata=claim.model_dump(mode="json") if hasattr(claim, 'model_dump') else {},
+            evidence_metadata=[ev.model_dump(mode="json") if hasattr(ev, 'model_dump') else {} for ev in evidence_list],
+            document_metadata=document_metadata,
+            transcript_metadata=transcript_metadata
+        )
