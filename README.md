@@ -453,6 +453,7 @@ It also exposes a `knowledge://state` resource with a JSON snapshot of the curre
 - `app.py` - Streamlit local UI (ingest with paste/upload modes + session history, RAG chat, KB browser + conflict resolution panel); install with `pip install ".[ui]"`
 - `src/knowledge_engine/embeddings.py` - embedding client: Ollama-native (`/api/embed`) + OpenAI-compatible transport, on-demand model lifecycle (`warm()`/`unload_sync()`), batching + `num_ctx` (async httpx + tenacity retry)
 - `src/knowledge_engine/llm.py` - MiMo (OpenAI-compatible) chat client (async httpx + tenacity retry)
+- `src/knowledge_engine/llm_config.py` - LLM configuration router with task-based priority routing (MiMo for HIGH, Ollama for LOW)
 - `src/knowledge_engine/extraction.py` - LLM-backed claim extraction (unbounded LLM + deterministic parsing)
 - `src/knowledge_engine/bootstrap.py` - shared engine bootstrap + `.env` loader with auto-start (used by server and CLI)
 - `src/knowledge_engine/transcript_evidence.py` - TranscriptEvidenceDraft model for evidence extracted from transcripts
