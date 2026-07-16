@@ -36,7 +36,11 @@ agent can then use that knowledge as working experience for later R&D tasks.
 
 1. **Python 3.11+** (verified with 3.14)
 2. **Neo4j 5.13+** — Community Server (no Docker required). See [wiki/Setup-Neo4j.md](wiki/Setup-Neo4j.md).
-3. **Ollama** — for local embeddings. Install from <https://ollama.com/download>, then `ollama pull bge-m3`.
+3. **Ollama** — for local embeddings and SLM. Install from <https://ollama.com/download>, then:
+   ```bash
+   ollama pull qwen3-embedding:0.6b  # Embeddings (639MB)
+   ollama pull qwen3.5:4b            # SLM for low-priority tasks (3.4GB)
+   ```
 4. **MiMo API key** — for LLM claim extraction. Set `KE_MIMO_API_KEY` in `.env`.
 
 ### Setup
@@ -364,7 +368,7 @@ but not yet built.
 - Per-domain evidence gates and evidence scoring
 - Graph schema (`graph/schema.py`): Cypher constraints + native vector index DDL + cycle-probe query (unit-tested)
 - `graph/neo4j_store.py`: real Neo4j-driver store — full read/write interface (node/edge upserts for all entity types, native vector search, Cypher-native cycle detection, domain listing, cross-domain pattern discovery). **Verified against Neo4j Community 2026.05.0** — full suite `python -m pytest -q` reports **198 passed** (Neo4j integration tests run when a database is reachable, otherwise skipped). See [wiki/Setup-Neo4j.md](wiki/Setup-Neo4j.md).
-- `embeddings.py`: embedding transport with two backends — local **Ollama-native** (`/api/embed`, default `bge-m3`, 1024-dim) and OpenAI-compatible (`/v1/embeddings`) — on async httpx + tenacity retry (exponential backoff on 429/503). Embedding is treated as **housekeeping**: the model is loaded on demand for a batch (`warm()`, `keep_alive=5m`) and released immediately afterwards (`unload_sync()`, `keep_alive=0`), so an idle engine holds no model in memory. Input is **batched** (`batch_size`, default 64) and **context-bounded** (`num_ctx`, default 1024) per request. Optional at server startup — when embedding env vars are absent, vector search tools return a clear error; all other tools still work.
+- `embeddings.py`: embedding transport with two backends — local **Ollama-native** (`/api/embed`, default `qwen3-embedding:0.6b`, 1024-dim) and OpenAI-compatible (`/v1/embeddings`) — on async httpx + tenacity retry (exponential backoff on 429/503). Embedding is treated as **housekeeping**: the model is loaded on demand for a batch (`warm()`, `keep_alive=5m`) and released immediately afterwards (`unload_sync()`, `keep_alive=0`), so an idle engine holds no model in memory. Input is **batched** (`batch_size`, default 64) and **context-bounded** (`num_ctx`, default 1024) per request. Optional at server startup — when embedding env vars are absent, vector search tools return a clear error; all other tools still work.
 - `llm.py` + `extraction.py`: MiMo (OpenAI-compatible) chat client and LLM-backed claim extraction. **Verified live against the MiMo gateway** (`https://api.xiaomimimo.com/v1`, `mimo-v2.5`, `tp-` token-plan key — chat returns 200). When `KE_MIMO_API_KEY` is set and a transcript arrives with no hand-authored claims, claims are extracted from the raw text. Extraction is the **unbounded** layer; parsing/validation is deterministic and **never fabricates evidence**, so extracted claims enter as `Unverified`. Optional and non-breaking (unit-tested with a stubbed client).
 - `scripts/ke.py`: command-line interface for ingest + query. When `KE_NEO4J_URI` is set, Neo4j is the primary store and all ingest writes go directly to the graph; otherwise falls back to the file-backed JSON store. See [docs/UAT-Usage-Guide.md](docs/UAT-Usage-Guide.md).
 - `store.py` JSON persistence (`save`/`load`) for the fallback store path.

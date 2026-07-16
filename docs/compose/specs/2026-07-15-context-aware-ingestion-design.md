@@ -77,6 +77,23 @@ Transcript → LLM extracts ClaimDraft(statement, slot_name) → Claim(evidence=
 | **Dedup Merger** | Deduplicate evidence from multiple sources | Hash + semantic similarity threshold |
 | **Provenance Validator** | Ensure provenance chains are complete | Check all required links exist |
 
+### LLM Configuration (Implemented 2026-07-15)
+
+**Task-based routing with single SLM model:**
+
+| Priority | Backend | Model | RAM | Use Cases |
+|----------|---------|-------|-----|-----------|
+| HIGH | MiMo API | mimo-2.5 | 0 (external) | Claim extraction, evidence extraction, synthesis, conflict interpretation |
+| LOW | Ollama | qwen3.5:4b | 3.4GB | Simple classification, evidence quality scoring, unstated assumptions |
+| EMBEDDING | Ollama | qwen3-embedding:0.6b | 639MB | Text similarity, semantic search, vector operations |
+
+**Config module**: `src/knowledge_engine/llm_config.py`
+- `get_llm_client(task_type)` → returns appropriate client based on task priority
+- `get_embedding_client()` → returns embedding client for vector operations
+- No fallbacks: raises RuntimeError if required client not configured
+
+**Total local RAM**: ~4GB (down from 8GB+ with multiple models)
+
 ## [S4] Data Models
 
 ### Enhanced Evidence Model
