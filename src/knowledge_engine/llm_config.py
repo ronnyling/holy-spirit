@@ -68,10 +68,10 @@ TASK_PRIORITIES: dict[TaskType, TaskPriority] = {
 
 
 # Single SLM model for all LOW priority generative tasks
-OLLAMA_SLM_MODEL = "qwen3:4b"
+OLLAMA_SLM_MODEL = "qwen3.5:4b"
 
-# Embedding model (already required for vector search)
-OLLAMA_EMBEDDING_MODEL = "bge-m3"
+# Embedding model (for vector search and text similarity)
+OLLAMA_EMBEDDING_MODEL = "qwen3-embedding:0.6b"
 
 
 @runtime_checkable
